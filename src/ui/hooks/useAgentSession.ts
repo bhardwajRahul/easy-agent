@@ -29,6 +29,11 @@ import { formatToolInputPreview } from "../utils/toolCardFormat.js";
 import { clearTodos, getTodos, subscribeTodos } from "../../state/todoStore.js";
 import type { TodoItem } from "../../types/todo.js";
 import { getTaskListId, listTasks, subscribeTasks } from "../../state/taskStore.js";
+import {
+  clearAllSubAgentProgress,
+  getSubAgentProgress,
+  subscribeSubAgentProgress,
+} from "../../state/subAgentProgressStore.js";
 import { findSkill } from "../../services/skills/registry.js";
 import { removeSandboxViolationTags } from "../../sandbox/index.js";
 import {
@@ -91,6 +96,7 @@ function buildCommandNotice(message: string, kind: "info" | "error"): SystemNoti
         "/mcp  Inspect MCP servers and their tools",
         "/skills  List loaded skills (user + project scope)",
         "/<skill-name> [args]  Run a registered skill as a chat turn",
+        "/agents  List built-in + custom sub-agent definitions",
         "/history  Show saved sessions for this project",
         "/compact  Compact conversation context",
         "/exit | /quit | /bye  Exit session",
@@ -138,6 +144,14 @@ function buildCommandNotice(message: string, kind: "info" | "error"): SystemNoti
     return {
       tone: kind,
       title: "Skills",
+      body: message,
+    };
+  }
+
+  if (message.startsWith("Agents (")) {
+    return {
+      tone: kind,
+      title: "Agents",
       body: message,
     };
   }
@@ -285,6 +299,29 @@ export function useAgentSession({
   useEffect(() => {
     setTaskModeState(getTaskMode());
     return subscribeTaskMode((mode) => setTaskModeState(mode));
+  }, []);
+
+  // Mirror sub-agent progress (published by AgentTool while a sub-agent
+  // runs) into the matching ToolCallInfo card. Match is by tool_use id —
+  // see subAgentProgressStore.ts for the rationale. Without this bridge
+  // the parent's "Using tool: Agent" card would just sit there until the
+  // sub-agent finished, with no visibility into what it was doing.
+  useEffect(() => {
+    const unsubscribe = subscribeSubAgentProgress((toolUseId, snapshot) => {
+      setToolCalls((prev) =>
+        prev.map((tc) => {
+          if (tc.id !== toolUseId) return tc;
+          if (snapshot === null) {
+            // Entry was cleared — drop the per-card snapshot too so the
+            // (rare) re-render after archive doesn't keep stale data.
+            const { subAgentProgress: _drop, ...rest } = tc;
+            return rest;
+          }
+          return { ...tc, subAgentProgress: snapshot };
+        }),
+      );
+    });
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -559,8 +596,24 @@ export function useAgentSession({
               flushTimerRef.current = setTimeout(flushPendingText, 30);
             }
             break;
-          case "tool_use_start":
-            setToolCalls((prev) => [...prev, { id: value.id, name: value.name }]);
+          case "tool_use_start": {
+            // For the Agent tool: by the time tool_use_start fires the
+            // agentTool body has either not started yet OR has already
+            // pushed the initial snapshot to the store (depends on the
+            // event-loop interleave). Pull the current store value so
+            // the very first render of the card is rich, not "Using
+            // tool: Agent". Subsequent updates flow through the store
+            // subscription set up above.
+            const seeded =
+              value.name === "Agent" ? getSubAgentProgress(value.id) : undefined;
+            setToolCalls((prev) => [
+              ...prev,
+              {
+                id: value.id,
+                name: value.name,
+                ...(seeded ? { subAgentProgress: seeded } : {}),
+              },
+            ]);
             await appendTranscriptEntry(toolContext.cwd, sessionIdRef.current, {
               type: "tool_event",
               timestamp: new Date().toISOString(),
@@ -568,6 +621,7 @@ export function useAgentSession({
               phase: "start",
             });
             break;
+          }
           case "permission_request":
             setSpinnerLabel("Waiting for permission");
             setPermissionPrompt({
@@ -632,6 +686,11 @@ export function useAgentSession({
             // importantly, to keep the final assistant text rendered
             // BELOW its tool calls (not above them).
             setToolCalls([]);
+            // Sub-agent progress entries lived alongside in-flight cards;
+            // since we just dropped those cards, drop the matching store
+            // entries too. ConversationView renders the historical Agent
+            // card from the formatted tool_result text, not the store.
+            clearAllSubAgentProgress();
             await appendTranscriptEntry(toolContext.cwd, sessionIdRef.current, {
               type: "message",
               timestamp: new Date().toISOString(),
@@ -730,6 +789,7 @@ export function useAgentSession({
             setToolCalls([]);
             setLastUsage(null);
             clearTodos(sessionIdRef.current);
+            clearAllSubAgentProgress();
             break;
           case "token_warning": {
             const w = value.warning;

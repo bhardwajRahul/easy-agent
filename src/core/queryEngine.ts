@@ -33,6 +33,7 @@ import {
   findSkill,
   getAllUserInvocableSkills,
 } from "../services/skills/registry.js";
+import { getAllAgents } from "../agents/registry.js";
 import type { Skill } from "../types/types.js";
 
 export type QueryEngineEvent =
@@ -453,13 +454,15 @@ export class QueryEngine {
         yield {
           type: "command",
           kind: "info",
-          message: "Commands: /help /clear /cost /model [name|default] /mode [default|plan|auto] /tasks [task|todo|reset] /mcp [tools <name>|reconnect <name>] /skills /history /compact /<skill-name> [args] /exit /quit /bye",
+          message: "Commands: /help /clear /cost /model [name|default] /mode [default|plan|auto] /tasks [task|todo|reset] /mcp [tools <name>|reconnect <name>] /skills /agents /history /compact /<skill-name> [args] /exit /quit /bye",
         };
         return { handled: true };
       case "mcp":
         return yield* this.handleMcpCommand(args);
       case "skills":
         return yield* this.handleSkillsCommand();
+      case "agents":
+        return yield* this.handleAgentsCommand();
       case "mode": {
         const nextMode = args[0]?.trim();
         if (!nextMode) {
@@ -669,6 +672,77 @@ export class QueryEngine {
       lines.push(`        [${flags.join("] [")}]`);
     }
     lines.push("", "Invoke a skill with /<name> [args], or let the model call it via the Skill tool.");
+    yield { type: "command", kind: "info", message: lines.join("\n") };
+    return { handled: true };
+  }
+
+  /**
+   * Handle `/agents` — read-only listing of every Agent definition the
+   * loader picked up at startup, grouped by source. Mirrors the source's
+   * `claude agents` CLI handler (claude-code-source-code/src/tools/
+   * AgentTool/agentDisplay.ts) but stripped to a text-only listing — no
+   * interactive AgentsMenu yet.
+   *
+   * The model only sees the agents in the system-prompt <system-reminder>;
+   * this command is the human-side answer to "what sub-agent types are
+   * available right now?"
+   */
+  private async *handleAgentsCommand(): AsyncGenerator<QueryEngineEvent, { handled: boolean }> {
+    const all = getAllAgents();
+    if (all.length === 0) {
+      yield {
+        type: "command",
+        kind: "info",
+        message:
+          "Agents (0 loaded)\n\n" +
+          "No agents registered. Built-ins should always be present — if you see\n" +
+          "this, the bootstrap may have failed; check the startup logs.\n" +
+          "Add custom agents under:\n" +
+          "  ~/.easy-agent/agents/<name>.md   (user-wide)\n" +
+          "  .easy-agent/agents/<name>.md     (project-only)",
+      };
+      return { handled: true };
+    }
+
+    // Group by source so a project override is visually adjacent to
+    // (and shadowing) its built-in. Order: built-in → user → project.
+    const SOURCE_ORDER: Record<string, number> = { "built-in": 0, user: 1, project: 2 };
+    const sorted = [...all].sort((a, b) => {
+      const cmp = (SOURCE_ORDER[a.source] ?? 99) - (SOURCE_ORDER[b.source] ?? 99);
+      if (cmp !== 0) return cmp;
+      return a.agentType.localeCompare(b.agentType);
+    });
+
+    const lines = [`Agents (${all.length} loaded)`, ""];
+    for (const agent of sorted) {
+      const tags: string[] = [agent.source];
+      if (agent.tools && agent.tools.length > 0) {
+        tags.push(`tools: ${agent.tools.join(",")}`);
+      } else {
+        tags.push("tools: *");
+      }
+      if (agent.disallowedTools && agent.disallowedTools.length > 0) {
+        tags.push(`disallowed: ${agent.disallowedTools.join(",")}`);
+      }
+      if (agent.model) tags.push(`model: ${agent.model}`);
+      if (agent.maxTurns !== undefined) tags.push(`maxTurns: ${agent.maxTurns}`);
+      if (agent.permissionMode) tags.push(`mode: ${agent.permissionMode}`);
+
+      const desc = agent.whenToUse.length > 200
+        ? `${agent.whenToUse.slice(0, 197)}…`
+        : agent.whenToUse;
+      lines.push(`  ${agent.agentType}    ${desc}`);
+      lines.push(`        [${tags.join("] [")}]`);
+      if (agent.filePath) {
+        lines.push(`        ${agent.filePath}`);
+      }
+    }
+    lines.push(
+      "",
+      "Sub-agents are spawned by the model via the `Agent` tool —",
+      "you cannot invoke them directly. The model picks `subagent_type` from",
+      "the names listed above, based on the task.",
+    );
     yield { type: "command", kind: "info", message: lines.join("\n") };
     return { handled: true };
   }

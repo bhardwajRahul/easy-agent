@@ -49,6 +49,7 @@ const BUILTIN_COMMANDS: CommandSuggestion[] = [
   { name: "/tasks", description: "Switch task tracking system (task=persistent V2, todo=session V1)" },
   { name: "/mcp", description: "Inspect / reconnect MCP servers" },
   { name: "/skills", description: "List loaded skills (user + project scope)" },
+  { name: "/agents", description: "List built-in + custom sub-agent definitions" },
   { name: "/history", description: "Show saved sessions for this project" },
   { name: "/compact", description: "Compact the conversation context" },
   { name: "/exit", description: "Exit the session" },

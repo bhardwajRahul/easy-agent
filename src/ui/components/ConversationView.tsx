@@ -86,6 +86,52 @@ function buildToolResultMap(messages: MessageParam[]): Map<string, ToolResultInf
  * block. Visual styling deliberately mirrors `ToolCallList` so that a card
  * in-flight and the same card archived in history look identical.
  */
+/**
+ * Pull the human-friendly Agent invocation summary out of a tool_use's
+ * raw input. Agent calls always have `prompt` + `description` (required
+ * by the schema) and an optional `subagent_type`. The input.prompt
+ * itself is the full sub-agent task — usually multi-line and noisy —
+ * so we deliberately surface only the short description here.
+ */
+function summarizeAgentInput(
+  input: Record<string, unknown> | undefined,
+): { agentType: string; description?: string } | null {
+  if (!input || typeof input !== "object") return null;
+  const subagent = typeof input["subagent_type"] === "string" ? input["subagent_type"] : "general-purpose";
+  const description = typeof input["description"] === "string" ? input["description"] : undefined;
+  return { agentType: subagent || "general-purpose", description };
+}
+
+function InlineAgentCard({
+  input,
+  result,
+}: {
+  input: Record<string, unknown> | undefined;
+  result: ToolResultInfo;
+}): React.ReactNode {
+  const summary = summarizeAgentInput(input);
+  const agentType = summary?.agentType ?? "general-purpose";
+  const description = summary?.description;
+  const color = result.isError ? "red" : "green";
+  const glyph = result.isError ? "✗" : "✓";
+
+  return (
+    <Box flexDirection="column" marginLeft={2}>
+      <Box>
+        <Text color={color}>{`  ${glyph} Agent`}</Text>
+        <Text bold color={color}>{`[${agentType}]`}</Text>
+        {description ? <Text>{`  ${description}`}</Text> : null}
+        {result.isError ? <Text color="red">{" — failed"}</Text> : null}
+      </Box>
+      {result.isError && result.content ? (
+        <Box marginLeft={4} flexDirection="column">
+          <Text color="red">{formatErrorBody(result.content)}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
 function InlineToolCard({
   name,
   input,
@@ -95,6 +141,12 @@ function InlineToolCard({
   input: Record<string, unknown> | undefined;
   result: ToolResultInfo;
 }): React.ReactNode {
+  // Agent calls get the same dedicated rendering as live SubAgentCard,
+  // just without the running spinner — see InlineAgentCard.
+  if (name === "Agent") {
+    return <InlineAgentCard input={input} result={result} />;
+  }
+
   const inputPreview = formatToolInputPreview(input);
 
   if (result.isError) {

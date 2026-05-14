@@ -188,7 +188,12 @@ export async function runTools(
         }
       }
 
-      const rawResult = await tool.call(toolInput, context);
+      // Stamp the tool_use id onto the per-call context so tools that
+      // need to publish out-of-band updates (currently just AgentTool's
+      // sub-agent progress store) can correlate their events back to
+      // the right tool-call card in the UI.
+      const callContext: ToolContext = { ...context, toolUseId: block.id };
+      const rawResult = await tool.call(toolInput, callContext);
       const result: ToolResult = {
         ...rawResult,
         content: truncateToolResult(rawResult.content, tool.maxResultSizeChars),

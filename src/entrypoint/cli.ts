@@ -50,6 +50,7 @@ Commands (in REPL):
   /mcp [tools|reconnect <n>]  Inspect or reconnect MCP servers
   /skills                     List loaded skills (user + project scope)
   /<skill-name> [args]        Invoke a skill by name
+  /agents                     List built-in + custom sub-agent definitions
   /history                    Show session history
 
 Sub-agents (stage 19):

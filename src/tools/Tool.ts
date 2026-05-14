@@ -52,6 +52,13 @@ export interface ToolContext {
   onPermissionRequest?: unknown;
   /** Parent loop's active model name (sub-agents fall back to this). */
   defaultModel?: string;
+  /**
+   * The model-assigned `tool_use` id for THIS specific invocation. Set
+   * fresh per call by `runTools()` in agenticLoop.ts. AgentTool uses it
+   * as the key for publishing live sub-agent progress to the UI store
+   * so the parent's tool-call card can be matched to the right sub-agent.
+   */
+  toolUseId?: string;
 }
 
 // ─── Tool Result ───────────────────────────────────────────────────

@@ -1,0 +1,179 @@
+/**
+ * Sub-agent progress store — global mailbox for live updates from
+ * `AgentTool.call()` while a sub-agent is running.
+ *
+ * Why a store and not the agentic-loop event stream:
+ *   The Agent tool runs INSIDE `runTools()` in agenticLoop.ts. While
+ *   `await tool.call()` is blocked on the sub-agent's full execution,
+ *   there's no path for the tool to yield events back into the parent
+ *   loop's AsyncGenerator. Mirroring `todoStore` / `taskStore` (which
+ *   already use this pattern for cross-cutting state updates) gives us
+ *   a clean side-channel: the tool publishes, the UI subscribes.
+ *
+ * Reference: claude-code-source-code/src/tools/AgentTool/UI.tsx
+ *   The source's renderToolUseProgressMessage() reads from a much
+ *   richer ProgressMessage stream (full sub-agent message history,
+ *   per-token usage breakdown, condensed-mode rendering, etc.). Stage
+ *   19 ships a minimal subset that matches our UI capacity:
+ *     - Agent type + description
+ *     - Live tool-use count
+ *     - Most recent tool name (so user sees "Read", "Grep", etc.)
+ *     - Final stats (turns / tokens / duration) on completion
+ *
+ * Keying:
+ *   Each sub-agent run is keyed by the parent's `tool_use.id`, set on
+ *   ToolContext per call by `runTools()`. The UI matches store entries
+ *   to ToolCallInfo by the same id — no name-based fallback (parallel
+ *   Agent calls would collide).
+ */
+
+import type { LoopTerminationReason } from "../core/agenticLoop.js";
+
+export type SubAgentStatus = "running" | "completed" | "error" | "max_turns" | "aborted";
+
+/** Live snapshot of one sub-agent's progress. */
+export interface SubAgentProgress {
+  /** AgentDefinition.agentType (e.g. "Explore", "general-purpose"). */
+  agentType: string;
+  /** Human-friendly task description from the model's input. */
+  description?: string;
+  /** Number of tool_use blocks the sub-agent has emitted so far. */
+  toolUseCount: number;
+  /** Most recent tool name observed (whatever the sub-agent called last). */
+  lastToolName?: string;
+  /** Whether the most recent tool call errored (resets on next call). */
+  lastToolIsError?: boolean;
+  /** Wall-clock start time (ms since epoch) — used to derive elapsed. */
+  startTime: number;
+  /** Updated only on completion. */
+  durationMs?: number;
+  /** Final loop termination reason — populated after the sub-agent ends. */
+  reason?: LoopTerminationReason;
+  /** Final aggregate token count (input + output). */
+  totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** High-level lifecycle. UI uses this to pick spinner vs check vs cross. */
+  status: SubAgentStatus;
+}
+
+type Listener = (toolUseId: string, snapshot: SubAgentProgress | null) => void;
+
+const store = new Map<string, SubAgentProgress>();
+const listeners = new Set<Listener>();
+
+function notify(toolUseId: string, snapshot: SubAgentProgress | null): void {
+  for (const l of listeners) l(toolUseId, snapshot);
+}
+
+export function getSubAgentProgress(toolUseId: string): SubAgentProgress | undefined {
+  return store.get(toolUseId);
+}
+
+/**
+ * Insert a fresh entry. Called once when AgentTool.call() starts so the
+ * UI can render "Initializing…" immediately instead of waiting for the
+ * first sub-agent tool_use_start event (which only fires after the LLM
+ * round-trip — could be seconds of dead air on slow models).
+ */
+export function startSubAgentProgress(
+  toolUseId: string,
+  init: Pick<SubAgentProgress, "agentType" | "description">,
+): void {
+  const snapshot: SubAgentProgress = {
+    agentType: init.agentType,
+    ...(init.description ? { description: init.description } : {}),
+    toolUseCount: 0,
+    startTime: Date.now(),
+    status: "running",
+  };
+  store.set(toolUseId, snapshot);
+  notify(toolUseId, snapshot);
+}
+
+/**
+ * Apply a partial update. Caller passes only the fields that changed —
+ * the store does the merge. Returns silently if the entry was never
+ * started (defensive: shouldn't happen, but tests / hot reloads).
+ */
+export function updateSubAgentProgress(
+  toolUseId: string,
+  patch: Partial<Omit<SubAgentProgress, "startTime">>,
+): void {
+  const cur = store.get(toolUseId);
+  if (!cur) return;
+  const next: SubAgentProgress = { ...cur, ...patch };
+  store.set(toolUseId, next);
+  notify(toolUseId, next);
+}
+
+/**
+ * Mark a sub-agent as finished and fold in the final stats. Once the
+ * UI's tool-call card transitions out of the live ToolCallList (after
+ * `tool_result_message` fires), the entry can be dropped — see
+ * `clearSubAgentProgress`.
+ */
+export function completeSubAgentProgress(
+  toolUseId: string,
+  result: {
+    reason: LoopTerminationReason;
+    durationMs: number;
+    totalTokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    toolUseCount: number;
+    isError?: boolean;
+  },
+): void {
+  const cur = store.get(toolUseId);
+  if (!cur) return;
+  const status: SubAgentStatus = result.isError
+    ? "error"
+    : result.reason === "completed"
+      ? "completed"
+      : result.reason === "max_turns"
+        ? "max_turns"
+        : result.reason === "aborted"
+          ? "aborted"
+          : // model_error / blocking_limit both surface as "error" — the
+            // user just needs to know the sub-agent didn't finish cleanly.
+            "error";
+  const next: SubAgentProgress = {
+    ...cur,
+    status,
+    reason: result.reason,
+    durationMs: result.durationMs,
+    totalTokens: result.totalTokens,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    toolUseCount: result.toolUseCount,
+  };
+  store.set(toolUseId, next);
+  notify(toolUseId, next);
+}
+
+/** Drop one entry — UI calls this after the tool-call card archives. */
+export function clearSubAgentProgress(toolUseId: string): void {
+  if (!store.has(toolUseId)) return;
+  store.delete(toolUseId);
+  notify(toolUseId, null);
+}
+
+/** Drop everything — used by tests and `/clear`. */
+export function clearAllSubAgentProgress(): void {
+  const ids = [...store.keys()];
+  store.clear();
+  for (const id of ids) notify(id, null);
+}
+
+export function subscribeSubAgentProgress(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** Snapshot all entries — useful for tests + future debug commands. */
+export function getAllSubAgentProgress(): Array<[string, SubAgentProgress]> {
+  return [...store.entries()];
+}

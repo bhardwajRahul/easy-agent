@@ -382,6 +382,159 @@ async function main(): Promise<void> {
     assert(result.warnings.length === 0, "missing agents/ dir → no warnings");
   });
 
+  console.log("\n[12] subAgentProgressStore — start / update / complete / clear");
+  {
+    const {
+      startSubAgentProgress,
+      updateSubAgentProgress,
+      completeSubAgentProgress,
+      clearSubAgentProgress,
+      getSubAgentProgress,
+      subscribeSubAgentProgress,
+      clearAllSubAgentProgress,
+    } = await import("../state/subAgentProgressStore.js");
+
+    clearAllSubAgentProgress();
+    const events: Array<{ id: string; status?: string; tools?: number }> = [];
+    const unsub = subscribeSubAgentProgress((id, snapshot) => {
+      events.push({
+        id,
+        ...(snapshot ? { status: snapshot.status, tools: snapshot.toolUseCount } : {}),
+      });
+    });
+
+    startSubAgentProgress("tool-1", { agentType: "Explore", description: "look around" });
+    const initial = getSubAgentProgress("tool-1");
+    assert(initial?.agentType === "Explore", "start → agentType captured");
+    assert(initial?.description === "look around", "start → description captured");
+    assert(initial?.status === "running", "start → status running");
+    assert(initial?.toolUseCount === 0, "start → toolUseCount 0");
+
+    updateSubAgentProgress("tool-1", { lastToolName: "Grep", toolUseCount: 1 });
+    const mid = getSubAgentProgress("tool-1");
+    assert(mid?.lastToolName === "Grep", "update → lastToolName mirrored");
+    assert(mid?.toolUseCount === 1, "update → toolUseCount mirrored");
+    assert(mid?.agentType === "Explore", "update preserves agentType");
+
+    completeSubAgentProgress("tool-1", {
+      reason: "completed",
+      durationMs: 1234,
+      totalTokens: 99,
+      inputTokens: 50,
+      outputTokens: 49,
+      toolUseCount: 5,
+    });
+    const done = getSubAgentProgress("tool-1");
+    assert(done?.status === "completed", "complete → status completed");
+    assert(done?.toolUseCount === 5, "complete → final toolUseCount overrides");
+    assert(done?.totalTokens === 99, "complete → totalTokens mirrored");
+    assert(done?.durationMs === 1234, "complete → durationMs mirrored");
+
+    completeSubAgentProgress("tool-2", { // missing entry → no-op
+      reason: "completed", durationMs: 1, totalTokens: 0, inputTokens: 0, outputTokens: 0, toolUseCount: 0,
+    });
+    assert(getSubAgentProgress("tool-2") === undefined, "complete on unknown id is a no-op");
+
+    // max_turns + abort + error mapping
+    startSubAgentProgress("tool-3", { agentType: "general-purpose" });
+    completeSubAgentProgress("tool-3", { reason: "max_turns", durationMs: 1, totalTokens: 0, inputTokens: 0, outputTokens: 0, toolUseCount: 0 });
+    assert(getSubAgentProgress("tool-3")?.status === "max_turns", "reason max_turns → status max_turns");
+
+    startSubAgentProgress("tool-4", { agentType: "general-purpose" });
+    completeSubAgentProgress("tool-4", { reason: "aborted", durationMs: 1, totalTokens: 0, inputTokens: 0, outputTokens: 0, toolUseCount: 0 });
+    assert(getSubAgentProgress("tool-4")?.status === "aborted", "reason aborted → status aborted");
+
+    startSubAgentProgress("tool-5", { agentType: "general-purpose" });
+    completeSubAgentProgress("tool-5", { reason: "model_error", durationMs: 1, totalTokens: 0, inputTokens: 0, outputTokens: 0, toolUseCount: 0 });
+    assert(getSubAgentProgress("tool-5")?.status === "error", "reason model_error → status error");
+
+    startSubAgentProgress("tool-6", { agentType: "general-purpose" });
+    completeSubAgentProgress("tool-6", { reason: "completed", durationMs: 1, totalTokens: 0, inputTokens: 0, outputTokens: 0, toolUseCount: 0, isError: true });
+    assert(getSubAgentProgress("tool-6")?.status === "error", "isError flag → status error even on completed reason");
+
+    // Subscriber received: 4 starts + 1 update + 4 completes (we counted above)
+    assert(events.some((e) => e.id === "tool-1" && e.status === "running"), "subscriber saw running event");
+    assert(events.some((e) => e.id === "tool-1" && e.status === "completed" && e.tools === 5), "subscriber saw completed event with final tools");
+
+    clearSubAgentProgress("tool-1");
+    assert(getSubAgentProgress("tool-1") === undefined, "clear drops the entry");
+    assert(events.some((e) => e.id === "tool-1" && e.status === undefined), "subscriber notified of clear with null snapshot");
+
+    clearAllSubAgentProgress();
+    assert(getSubAgentProgress("tool-3") === undefined, "clearAll drops every entry");
+    unsub();
+  }
+
+  console.log("\n[13] /agents command — handler emits a sourced listing");
+  {
+    const { QueryEngine } = await import("../core/queryEngine.js");
+
+    setAgents([
+      {
+        agentType: "Explore",
+        whenToUse: "code exploration specialist",
+        source: "built-in",
+        tools: ["Read", "Grep", "Glob"],
+        disallowedTools: ["Write", "Edit"],
+        getSystemPrompt: () => "explore prompt",
+      },
+      {
+        agentType: "general-purpose",
+        whenToUse: "default delegate",
+        source: "built-in",
+        getSystemPrompt: () => "gp prompt",
+      },
+      {
+        agentType: "code-reviewer",
+        whenToUse: "Review staged diffs before commit.",
+        source: "project",
+        model: "claude-haiku-4.5",
+        maxTurns: 10,
+        permissionMode: "default",
+        filePath: "/tmp/.easy-agent/agents/code-reviewer.md",
+        getSystemPrompt: () => "reviewer prompt",
+      },
+    ]);
+
+    const engine = new QueryEngine({
+      model: "test-model",
+      toolContext: {
+        cwd: process.cwd(),
+        sessionId: "test-agents-cmd",
+      },
+    });
+
+    let infoMessage = "";
+    const generator = engine.submitMessage("/agents");
+    let next = await generator.next();
+    while (!next.done) {
+      const event = next.value;
+      if (event.type === "command" && event.kind === "info") {
+        infoMessage = event.message;
+      }
+      next = await generator.next();
+    }
+
+    assert(infoMessage.startsWith("Agents (3 loaded)"), "/agents header counts all agents");
+    assert(infoMessage.includes("general-purpose"), "/agents includes general-purpose");
+    assert(infoMessage.includes("Explore"), "/agents includes Explore");
+    assert(infoMessage.includes("code-reviewer"), "/agents includes custom project agent");
+    assert(infoMessage.includes("[built-in]"), "/agents tags built-in source");
+    assert(infoMessage.includes("[project]"), "/agents tags project source");
+    assert(infoMessage.includes("tools: Read,Grep,Glob"), "/agents shows tools allow-list");
+    assert(infoMessage.includes("disallowed: Write,Edit"), "/agents shows disallowedTools");
+    assert(infoMessage.includes("model: claude-haiku-4.5"), "/agents shows model override");
+    assert(infoMessage.includes("maxTurns: 10"), "/agents shows maxTurns");
+
+    // Built-in must come BEFORE project in the listing — ordering matters
+    // for users scanning by source.
+    const idxBuiltIn = infoMessage.indexOf("Explore");
+    const idxProject = infoMessage.indexOf("code-reviewer");
+    assert(idxBuiltIn < idxProject, "/agents lists built-in before project");
+
+    clearAgents();
+  }
+
   if (failures.length > 0) {
     console.error(`\n${failures.length} assertion(s) failed:`);
     for (const f of failures) console.error(`  - ${f}`);

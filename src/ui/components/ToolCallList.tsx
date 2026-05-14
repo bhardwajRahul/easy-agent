@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ToolCallInfo } from "../types.js";
 import { formatErrorBody } from "../utils/toolCardFormat.js";
+import { SubAgentCard } from "./SubAgentCard.js";
 
 interface ToolCallListProps {
   toolCalls: ToolCallInfo[];
@@ -18,6 +19,14 @@ export function ToolCallList({ toolCalls }: ToolCallListProps): React.ReactNode 
         const label = toolCall.displayName ?? toolCall.name;
         const pending = toolCall.resultLength === undefined;
         const key = toolCall.id || `tc${index}`;
+
+        // Agent tool always uses the rich SubAgentCard renderer — both
+        // while running (live counters from the progress store) and
+        // after completion (final stats baked into the snapshot).
+        // Falls back to the basic card if no snapshot is attached.
+        if (toolCall.name === "Agent" && toolCall.subAgentProgress) {
+          return <SubAgentCard key={key} toolCall={toolCall} />;
+        }
 
         if (pending) {
           return (

@@ -1,4 +1,5 @@
 import type { PermissionMode } from "../permissions/permissions.js";
+import type { SubAgentProgress } from "../state/subAgentProgressStore.js";
 
 export interface ToolCallInfo {
   /**
@@ -18,6 +19,17 @@ export interface ToolCallInfo {
   inputPreview?: string;
   /** Full error content from the tool (shown when isError). */
   errorMessage?: string;
+  /**
+   * For Agent tool calls: live snapshot from `subAgentProgressStore`,
+   * mirrored into the card via the useAgentSession hook. Undefined
+   * for non-Agent tools (and for Agent calls before the first
+   * progress event arrives — though we seed it at tool_use_start so
+   * this should be very brief).
+   *
+   * Mirrored into ToolCallInfo (rather than queried at render time)
+   * so re-renders can be driven by setState in one place.
+   */
+  subAgentProgress?: SubAgentProgress;
 }
 
 export interface UsageSummary {

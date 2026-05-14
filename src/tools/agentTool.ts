@@ -35,6 +35,11 @@ import type {
   PermissionRuleSet,
   PermissionSettings,
 } from "../permissions/permissions.js";
+import {
+  completeSubAgentProgress,
+  startSubAgentProgress,
+  updateSubAgentProgress,
+} from "../state/subAgentProgressStore.js";
 
 // agentTool MUST avoid statically importing anything in the
 // tools/* ↔ core/agenticLoop ↔ tools/* chain — otherwise the
@@ -178,6 +183,47 @@ export const agentTool: Tool = {
       | ((request: PermissionRequest) => Promise<PermissionDecision>)
       | undefined;
 
+    // The parent's tool_use id is our key into the sub-agent progress
+    // store. UI subscribes to that store and merges live updates into
+    // the matching ToolCallInfo. Without an id we can't correlate, so
+    // we silently fall back to "no progress UI" — the tool still works.
+    const progressKey = context.toolUseId;
+    if (progressKey) {
+      startSubAgentProgress(progressKey, {
+        agentType,
+        ...(description ? { description } : {}),
+      });
+    }
+
+    // Map AgentProgressEvent (from the sub-agent's own loop) onto the
+    // store's update API. We track tool count via tool_use_done (not
+    // _start) to mirror the source's behavior of only counting completed
+    // calls — avoids an inflated mid-call number flickering on the UI.
+    const onProgress = progressKey
+      ? (event: import("../agents/runAgent.js").AgentProgressEvent): void => {
+          switch (event.type) {
+            case "tool_use_start":
+              // Optimistic update — show "running: <toolName>" the
+              // moment the model emits the call, even before it
+              // resolves. Count is incremented at done so it matches
+              // the final tool-use total.
+              updateSubAgentProgress(progressKey, {
+                lastToolName: event.toolName,
+                lastToolIsError: false,
+              });
+              break;
+            case "tool_use_done":
+              updateSubAgentProgress(progressKey, {
+                lastToolName: event.toolName,
+                lastToolIsError: event.isError === true,
+              });
+              break;
+            default:
+              break;
+          }
+        }
+      : undefined;
+
     try {
       const runChildAgent = await loadRunChildAgent();
       const result = await runChildAgent({
@@ -191,11 +237,38 @@ export const agentTool: Tool = {
         sessionPermissionRules,
         onPermissionRequest,
         abortSignal: context.abortSignal,
+        ...(onProgress ? { onProgress } : {}),
       });
+
+      if (progressKey) {
+        completeSubAgentProgress(progressKey, {
+          reason: result.reason,
+          durationMs: result.totalDurationMs,
+          totalTokens: result.totalTokens,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          toolUseCount: result.totalToolUseCount,
+        });
+      }
 
       return { content: formatResult({ agentType, description, result }) };
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
+      if (progressKey) {
+        // model_error is the closest LoopTerminationReason for "the
+        // sub-agent threw" — runChildAgent itself didn't return because
+        // the agentic loop crashed. The store maps this (with isError
+        // also set) onto status: "error" for the UI.
+        completeSubAgentProgress(progressKey, {
+          reason: "model_error",
+          durationMs: 0,
+          totalTokens: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          toolUseCount: 0,
+          isError: true,
+        });
+      }
       return {
         content: `Error: sub-agent '${agentType}' failed to complete: ${msg}`,
         isError: true,
