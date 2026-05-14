@@ -25,6 +25,7 @@ import { taskUpdateTool } from "./taskUpdateTool.js";
 import { taskGetTool } from "./taskGetTool.js";
 import { taskListTool } from "./taskListTool.js";
 import { skillTool } from "./skillTool.js";
+import { agentTool } from "./agentTool.js";
 import type { PermissionMode } from "../permissions/permissions.js";
 
 const BUILTIN_TOOLS: Tool[] = [
@@ -43,6 +44,7 @@ const BUILTIN_TOOLS: Tool[] = [
   enterPlanModeTool,
   exitPlanModeTool,
   skillTool,
+  agentTool,
 ];
 
 let mcpTools: Tool[] = [];

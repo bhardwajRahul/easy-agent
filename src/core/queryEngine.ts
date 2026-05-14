@@ -368,6 +368,14 @@ export class QueryEngine {
         setPermissionMode: (mode: string) => this.setPermissionMode(mode as PermissionMode),
         getPermissionMode: () => this.currentPermissionMode,
         addSessionAllowRules: (rules: string[]) => this.addSessionAllowRules(rules),
+        // Sub-agent spawning support (stage 19): expose the parent's
+        // permission infrastructure + active model so the AgentTool can
+        // hand them to runChildAgent. Tools other than Agent ignore
+        // these fields.
+        permissionSettings: this.permissionSettings,
+        sessionPermissionRules: this.sessionPermissionRules,
+        onPermissionRequest: this.onPermissionRequest,
+        defaultModel: this.getActiveModel(),
       };
 
       const loop = query({

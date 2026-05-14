@@ -51,6 +51,11 @@ Commands (in REPL):
   /skills                     List loaded skills (user + project scope)
   /<skill-name> [args]        Invoke a skill by name
   /history                    Show session history
+
+Sub-agents (stage 19):
+  Built-in: general-purpose, Explore
+  Custom:   add <cwd>/.easy-agent/agents/<name>.md or ~/.easy-agent/agents/<name>.md
+  See doc/DEVELOPMENT-PLAN.md §19 for the agent file frontmatter schema.
   /compact                    Compact conversation context
   /exit, /quit, /bye          Exit the REPL
 `);
@@ -74,6 +79,16 @@ Commands (in REPL):
   const { bootstrapSkills } = await import("../services/skills/bootstrap.js");
   await bootstrapSkills(process.cwd()).catch((error) => {
     console.error(`[easy-agent] skills bootstrap failed: ${(error as Error).message}`);
+  });
+
+  // Agents (stage 19) — same reason as skills: the system prompt's
+  // <system-reminder> for available sub-agent types is built from the
+  // registry, so the registry has to be populated before any prompt
+  // rendering. Built-ins are synchronous; user/project agents come from
+  // disk so we await before continuing.
+  const { bootstrapAgents } = await import("../agents/bootstrap.js");
+  await bootstrapAgents(process.cwd()).catch((error) => {
+    console.error(`[easy-agent] agents bootstrap failed: ${(error as Error).message}`);
   });
 
   // Sandbox availability: if the user opted in via settings.json but

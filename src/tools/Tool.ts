@@ -33,6 +33,25 @@ export interface ToolContext {
    * `agentId ?? getSessionId()` lookup pattern in `appState.todos[todoKey]`.
    */
   sessionId?: string;
+
+  // ─── Sub-agent spawning support (stage 19) ────────────────────────
+  //
+  // The Agent tool needs to give its sub-agent the same permission
+  // infrastructure the parent loop has — settings file rules, session
+  // allow/deny rules, and the prompt callback for ask-mode confirmations.
+  // The QueryEngine populates these on the per-submit enriched context;
+  // tools other than Agent ignore them. Typed as `unknown` to avoid a
+  // circular type import with permissions.ts; agentTool casts at the
+  // call site.
+
+  /** Parent loop's loaded permission settings (PermissionSettings). */
+  permissionSettings?: unknown;
+  /** Parent loop's session-scoped allow/deny rules (PermissionRuleSet). */
+  sessionPermissionRules?: unknown;
+  /** Parent loop's permission-prompt callback. */
+  onPermissionRequest?: unknown;
+  /** Parent loop's active model name (sub-agents fall back to this). */
+  defaultModel?: string;
 }
 
 // ─── Tool Result ───────────────────────────────────────────────────

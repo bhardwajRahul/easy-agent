@@ -1,0 +1,397 @@
+#!/usr/bin/env tsx
+/**
+ * Stage 19 verification script — exercise the Sub-Agent subsystem WITHOUT
+ * touching the LLM. Validates the loader, registry, tool resolver,
+ * built-in agents, system-prompt formatter, AgentTool input handling, and
+ * permission interactions.
+ *
+ * Why no LLM round-trip here: spinning up a real sub-agent loop hits the
+ * Anthropic API, costs money, and is non-deterministic. The end-to-end
+ * smoke is left for the user to run interactively via `npm run dev`. The
+ * checks below catch the mechanical mistakes that are 95% of the bugs.
+ *
+ * Usage:
+ *   cd easy-agent
+ *   npx tsx src/scripts/test-agents.ts
+ *
+ * Exits non-zero on any assertion failure.
+ */
+
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { bootstrapAgents } from "../agents/bootstrap.js";
+import {
+  clearAgents,
+  findAgent,
+  getAllAgents,
+  setAgents,
+} from "../agents/registry.js";
+import { getBuiltInAgents } from "../agents/builtIn/index.js";
+import { loadAllCustomAgents } from "../agents/loadAgentsDir.js";
+import {
+  AGENT_TOOL_NAME,
+  resolveAgentTools,
+} from "../agents/resolveAgentTools.js";
+import { formatAgentsSystemReminder } from "../agents/promptInjection.js";
+import { agentTool } from "../tools/agentTool.js";
+import { getAllTools } from "../tools/index.js";
+import { checkPermission } from "../permissions/permissions.js";
+import {
+  buildSystemPrompt,
+  renderSystemPrompt,
+} from "../context/systemPrompt.js";
+
+const failures: string[] = [];
+function assert(condition: unknown, label: string): void {
+  if (condition) {
+    console.log(`  ✓ ${label}`);
+  } else {
+    console.log(`  ✗ ${label}`);
+    failures.push(label);
+  }
+}
+
+async function withTempProject(
+  fn: (cwd: string) => Promise<void>,
+): Promise<void> {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "easy-agent-agents-"));
+  try {
+    await fn(tmp);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+}
+
+async function main(): Promise<void> {
+  console.log("\n[1] Built-in agent definitions");
+  const builtIns = getBuiltInAgents();
+  assert(builtIns.length === 2, "exactly 2 built-in agents (general-purpose, Explore)");
+  assert(
+    builtIns.some((a) => a.agentType === "general-purpose"),
+    "general-purpose agent is built-in",
+  );
+  assert(
+    builtIns.some((a) => a.agentType === "Explore"),
+    "Explore agent is built-in",
+  );
+  const explore = builtIns.find((a) => a.agentType === "Explore");
+  assert(
+    explore?.disallowedTools?.includes("Write"),
+    "Explore agent disallows Write",
+  );
+  assert(
+    explore?.disallowedTools?.includes("Edit"),
+    "Explore agent disallows Edit",
+  );
+  const exploreSP = explore?.getSystemPrompt() ?? "";
+  assert(
+    exploreSP.includes("READ-ONLY"),
+    "Explore system prompt enforces read-only mode",
+  );
+  const generalPurpose = builtIns.find((a) => a.agentType === "general-purpose");
+  assert(
+    !generalPurpose?.tools && !generalPurpose?.disallowedTools,
+    "general-purpose has no tools / disallowedTools (wildcard)",
+  );
+
+  console.log("\n[2] resolveAgentTools — wildcard + Agent stripping");
+  const allTools = getAllTools();
+  assert(
+    allTools.some((t) => t.name === AGENT_TOOL_NAME),
+    "Agent tool is registered in the global tool pool",
+  );
+  const wildcardResolved = resolveAgentTools({}, allTools);
+  assert(wildcardResolved.hasWildcard, "undefined `tools` → wildcard");
+  assert(
+    !wildcardResolved.resolvedTools.some((t) => t.name === AGENT_TOOL_NAME),
+    "wildcard resolution strips Agent tool itself (no recursion)",
+  );
+  const starResolved = resolveAgentTools({ tools: ["*"] }, allTools);
+  assert(starResolved.hasWildcard, "`tools: ['*']` → wildcard");
+
+  console.log("\n[3] resolveAgentTools — disallowedTools applies under wildcard");
+  const exploreResolved = resolveAgentTools(
+    { disallowedTools: ["Write", "Edit", "MemoryWrite"] },
+    allTools,
+  );
+  assert(
+    exploreResolved.hasWildcard,
+    "Explore-style resolution still wildcard",
+  );
+  assert(
+    !exploreResolved.resolvedTools.some((t) => t.name === "Write"),
+    "Write is removed by disallowedTools",
+  );
+  assert(
+    !exploreResolved.resolvedTools.some((t) => t.name === "Edit"),
+    "Edit is removed by disallowedTools",
+  );
+  assert(
+    exploreResolved.resolvedTools.some((t) => t.name === "Read"),
+    "Read survives the disallow",
+  );
+
+  console.log("\n[4] resolveAgentTools — explicit allow-list intersect");
+  const reviewerResolved = resolveAgentTools(
+    { tools: ["Read", "Grep", "Glob", "Bash", "Bogus"] },
+    allTools,
+  );
+  assert(!reviewerResolved.hasWildcard, "explicit `tools` → not wildcard");
+  assert(
+    reviewerResolved.resolvedTools.length === 4,
+    "explicit allow-list produces 4 valid tools",
+  );
+  assert(
+    reviewerResolved.invalidTools.includes("Bogus"),
+    "unknown tool name surfaces in invalidTools",
+  );
+  assert(
+    !reviewerResolved.resolvedTools.some((t) => t.name === AGENT_TOOL_NAME),
+    "explicit list still cannot opt-in to the Agent tool (no recursion)",
+  );
+
+  console.log("\n[5] Custom agent loading + override");
+  await withTempProject(async (cwd) => {
+    const agentsDir = path.join(cwd, ".easy-agent", "agents");
+    await fs.mkdir(agentsDir, { recursive: true });
+
+    // (a) A reviewer agent (custom name).
+    await fs.writeFile(
+      path.join(agentsDir, "reviewer.md"),
+      [
+        "---",
+        'name: "reviewer"',
+        'description: "Code review specialist"',
+        'tools: "Read,Glob,Grep,Bash"',
+        'disallowedTools: "Write,Edit"',
+        'maxTurns: 12',
+        "---",
+        "You are a code review specialist. Review the diff and report findings.",
+      ].join("\n"),
+    );
+
+    // (b) An override of the built-in Explore agent — same agentType.
+    await fs.writeFile(
+      path.join(agentsDir, "Explore.md"),
+      [
+        "---",
+        'name: "Explore"',
+        'description: "Custom Explore override (project-scope)"',
+        "---",
+        "Custom Explore prompt.",
+      ].join("\n"),
+    );
+
+    // (c) An invalid file — missing description. Should be skipped with warning.
+    await fs.writeFile(
+      path.join(agentsDir, "broken.md"),
+      [
+        "---",
+        'name: "broken"',
+        "---",
+        "missing description, should be skipped",
+      ].join("\n"),
+    );
+
+    const result = await bootstrapAgents(cwd);
+    assert(result.builtInCount === 2, "bootstrap reports 2 built-ins");
+    assert(
+      result.customCount === 2,
+      "bootstrap reports 2 valid custom agents (reviewer + Explore override)",
+    );
+    assert(
+      result.warnings.some((w) => w.includes("broken.md")),
+      "broken.md skipped with warning",
+    );
+
+    const reviewer = findAgent("reviewer");
+    assert(reviewer, "reviewer agent loaded by name");
+    assert(
+      reviewer?.tools?.length === 4 &&
+        reviewer.tools.includes("Read") &&
+        reviewer.tools.includes("Bash"),
+      "reviewer parses CSV `tools` field correctly",
+    );
+    assert(
+      reviewer?.disallowedTools?.includes("Write") &&
+        reviewer.disallowedTools.includes("Edit"),
+      "reviewer parses CSV `disallowedTools` field correctly",
+    );
+    assert(reviewer?.maxTurns === 12, "reviewer maxTurns parsed as 12");
+    assert(reviewer?.source === "project", "reviewer source is 'project'");
+
+    const exploreAfter = findAgent("Explore");
+    assert(
+      exploreAfter?.source === "project",
+      "Explore is now the project-scope override (built-in shadowed)",
+    );
+    assert(
+      exploreAfter?.getSystemPrompt() === "Custom Explore prompt.",
+      "Custom Explore body wins over the built-in's READ-ONLY prompt",
+    );
+
+    console.log("\n[6] resolveAgentTools — wildcard with no disallow + override semantics");
+    // The custom Explore declares no tools/disallowedTools, so it gets
+    // wildcard with NO write protection. This intentionally mirrors source
+    // — overriding the built-in means you take responsibility for the
+    // safeguards too. Verify the resolver reflects that.
+    const overrideResolved = resolveAgentTools(
+      exploreAfter ?? {},
+      allTools,
+    );
+    assert(
+      overrideResolved.hasWildcard,
+      "custom Explore (no tools field) is wildcard",
+    );
+    assert(
+      overrideResolved.resolvedTools.some((t) => t.name === "Write"),
+      "custom Explore can use Write — overrides drop the built-in's safeguards",
+    );
+
+    console.log("\n[7] System prompt — agents <system-reminder> block");
+    const parts = await buildSystemPrompt({ cwd });
+    const rendered = renderSystemPrompt(parts);
+    assert(
+      rendered.includes("Available sub-agents you can invoke via the `Agent` tool"),
+      "system prompt contains the agents reminder header",
+    );
+    assert(
+      rendered.includes("- general-purpose [built-in]"),
+      "system prompt lists general-purpose as built-in",
+    );
+    assert(
+      rendered.includes("- Explore [project]"),
+      "system prompt lists Explore as project (override took effect)",
+    );
+    assert(
+      rendered.includes("- reviewer [project]"),
+      "system prompt lists reviewer as project",
+    );
+
+    console.log("\n[8] AgentTool — input validation + lookup errors");
+    const cwdContext = { cwd, sessionId: "test-session" };
+
+    const missingPrompt = await agentTool.call({}, cwdContext);
+    assert(missingPrompt.isError, "missing prompt is an error");
+    assert(
+      missingPrompt.content.includes("'prompt' is required"),
+      "error message mentions 'prompt' required",
+    );
+
+    const unknownAgent = await agentTool.call(
+      { prompt: "do something", description: "test", subagent_type: "does-not-exist" },
+      cwdContext,
+    );
+    assert(unknownAgent.isError, "unknown agent type is an error");
+    assert(
+      unknownAgent.content.includes("'does-not-exist'"),
+      "error message names the bad agent type",
+    );
+    assert(
+      unknownAgent.content.includes("Available types"),
+      "error lists available agent types",
+    );
+
+    console.log("\n[9] Permissions — Agent tool decisions in each mode");
+    // Default mode: Agent is read-only → auto-allow.
+    const defaultDecision = await checkPermission({
+      tool: agentTool,
+      input: { prompt: "x", description: "y" },
+      cwd,
+      mode: "default",
+      settings: { allow: [], deny: [], mode: "default" },
+    });
+    assert(
+      defaultDecision.behavior === "allow",
+      "Agent in default mode → allow (read-only delegation)",
+    );
+
+    // Plan mode: Agent NOT in PLAN_ALLOWED_TOOLS → deny.
+    const planDecision = await checkPermission({
+      tool: agentTool,
+      input: { prompt: "x", description: "y" },
+      cwd,
+      mode: "plan",
+      settings: { allow: [], deny: [], mode: "plan" },
+    });
+    assert(
+      planDecision.behavior === "deny",
+      "Agent in plan mode → deny (only Read/Grep/Glob allowed)",
+    );
+
+    // Auto mode: everything allowed.
+    const autoDecision = await checkPermission({
+      tool: agentTool,
+      input: { prompt: "x", description: "y" },
+      cwd,
+      mode: "auto",
+      settings: { allow: [], deny: [], mode: "auto" },
+    });
+    assert(
+      autoDecision.behavior === "allow",
+      "Agent in auto mode → allow",
+    );
+
+    // Reset registry so subsequent test runs in this process don't see the
+    // tmpdir-loaded agents (probably no callers, but cheap insurance).
+    clearAgents();
+  });
+
+  console.log("\n[10] formatAgentsSystemReminder — empty + sorted");
+  const empty = formatAgentsSystemReminder([]);
+  assert(empty === "", "empty agents list → empty reminder string");
+
+  setAgents([
+    {
+      agentType: "z-custom",
+      whenToUse: "Z agent",
+      source: "project",
+      getSystemPrompt: () => "z",
+    },
+    {
+      agentType: "a-custom",
+      whenToUse: "A agent",
+      source: "user",
+      getSystemPrompt: () => "a",
+    },
+    {
+      agentType: "Explore",
+      whenToUse: "Explore",
+      source: "built-in",
+      getSystemPrompt: () => "explore",
+    },
+  ]);
+  const sortedReminder = formatAgentsSystemReminder(getAllAgents());
+  const idxBuiltIn = sortedReminder.indexOf("Explore [built-in]");
+  const idxA = sortedReminder.indexOf("a-custom [user]");
+  const idxZ = sortedReminder.indexOf("z-custom [project]");
+  assert(idxBuiltIn !== -1, "Explore appears in sortedReminder");
+  assert(idxA !== -1 && idxZ !== -1, "custom agents appear in sortedReminder");
+  assert(
+    idxBuiltIn < idxA && idxA < idxZ,
+    "built-in sorted first, then alphabetical",
+  );
+  clearAgents();
+
+  console.log("\n[11] loadAllCustomAgents — empty / missing dir is silent");
+  await withTempProject(async (cwd) => {
+    const result = await loadAllCustomAgents(cwd);
+    assert(result.agents.length === 0, "missing agents/ dir → 0 agents loaded");
+    assert(result.warnings.length === 0, "missing agents/ dir → no warnings");
+  });
+
+  if (failures.length > 0) {
+    console.error(`\n${failures.length} assertion(s) failed:`);
+    for (const f of failures) console.error(`  - ${f}`);
+    process.exit(1);
+  }
+
+  console.log("\nAll agents checks passed.\n");
+}
+
+main().catch((err: unknown) => {
+  console.error("Fatal:", err);
+  process.exit(1);
+});

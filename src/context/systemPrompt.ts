@@ -6,6 +6,8 @@ import { buildMemoryPromptInstructions, ensureMemoryDirExists, formatMemorySyste
 import { buildMemoryAccessGuidance, buildMemoryExclusionGuidance, buildMemoryPersistenceBoundaryGuidance, buildMemoryTypeGuidance, buildMemoryValidationGuidance } from "./memory/memoryTypes.js";
 import { formatSkillsSystemReminder } from "../services/skills/budget.js";
 import { getModelVisibleSkills } from "../services/skills/registry.js";
+import { formatAgentsSystemReminder } from "../agents/promptInjection.js";
+import { getAllAgents } from "../agents/registry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -127,6 +129,11 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions): Prom
   // skills/conditional.ts.
   const skillsReminder = formatSkillsSystemReminder(getModelVisibleSkills());
 
+  // Agents discovery listing — same pattern as skills. Tells the model
+  // which `subagent_type` values it can pass to the Agent tool. The
+  // registry is populated at startup by bootstrapAgents() in cli.ts.
+  const agentsReminder = formatAgentsSystemReminder(getAllAgents());
+
   const dynamicSections = [
     SYSTEM_PROMPT_DYNAMIC_START,
     formatEnvironmentContext(environmentContext),
@@ -134,6 +141,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions): Prom
     memorySections.length > 0 ? memorySections.join("\n\n") : "",
     options.additionalInstructions ? "Session instructions:\n" + options.additionalInstructions : "",
     skillsReminder,
+    agentsReminder,
     SYSTEM_PROMPT_DYNAMIC_END,
   ].filter(Boolean);
 
