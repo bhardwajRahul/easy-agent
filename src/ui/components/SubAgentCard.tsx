@@ -121,8 +121,13 @@ export function SubAgentCard({ toolCall }: SubAgentCardProps): React.ReactNode {
   );
 
   // Body line(s):
-  //   Running → "<count> tool uses · last: <name>"
+  //   Running → "<count> tool uses · <tokens> tokens · last: <name>"
   //   Done    → "<count> tool uses · <tokens> tokens · <duration>"
+  // Token line is live — agentTool publishes cumulative usage from each
+  // sub-agent turn into the store, so this number ticks upward while
+  // the sub-agent is still working (matches Claude Code's behavior of
+  // showing "17 tool uses · 28.0k tokens" mid-flight, side-by-side
+  // with sibling agents in a parallel batch).
   let body: React.ReactNode = null;
   if (isRunning) {
     const parts: string[] = [];
@@ -130,6 +135,9 @@ export function SubAgentCard({ toolCall }: SubAgentCardProps): React.ReactNode {
       parts.push(
         `${progress.toolUseCount} tool use${progress.toolUseCount === 1 ? "" : "s"}`,
       );
+    }
+    if (progress.totalTokens && progress.totalTokens > 0) {
+      parts.push(`${formatNumber(progress.totalTokens)} tokens`);
     }
     if (progress.lastToolName) {
       const errorTag = progress.lastToolIsError ? " (error)" : "";

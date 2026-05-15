@@ -82,4 +82,9 @@ export const grepTool: Tool = {
   isEnabled(): boolean {
     return true;
   },
+  isConcurrencySafe(): boolean {
+    // Spawns ripgrep as a child process; no shared state. Multiple
+    // concurrent searches just stack subprocesses, which the OS handles.
+    return true;
+  },
 };

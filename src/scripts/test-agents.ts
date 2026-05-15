@@ -535,6 +535,188 @@ async function main(): Promise<void> {
     clearAgents();
   }
 
+  console.log("\n[14] Tool concurrency flags + agentTool isConcurrencySafe");
+  {
+    const allTools2 = getAllTools();
+    const findTool = (n: string) => allTools2.find((t) => t.name === n);
+
+    assert(
+      findTool("Agent")?.isConcurrencySafe?.() === true,
+      "Agent tool isConcurrencySafe → true (parallel sub-agent fan-out)",
+    );
+    assert(
+      findTool("Read")?.isConcurrencySafe?.() === true,
+      "Read tool isConcurrencySafe → true",
+    );
+    assert(
+      findTool("Grep")?.isConcurrencySafe?.() === true,
+      "Grep tool isConcurrencySafe → true",
+    );
+    assert(
+      findTool("Glob")?.isConcurrencySafe?.() === true,
+      "Glob tool isConcurrencySafe → true",
+    );
+    // Mutating tools must remain serial.
+    const writeUnsafe = findTool("Write")?.isConcurrencySafe?.() ?? false;
+    const editUnsafe = findTool("Edit")?.isConcurrencySafe?.() ?? false;
+    const bashUnsafe = findTool("Bash")?.isConcurrencySafe?.() ?? false;
+    assert(writeUnsafe === false, "Write tool stays not concurrency-safe");
+    assert(editUnsafe === false, "Edit tool stays not concurrency-safe");
+    assert(bashUnsafe === false, "Bash tool stays not concurrency-safe");
+  }
+
+  console.log("\n[15] runTools — parallel batches actually run concurrently");
+  {
+    // We test the partition/parallel logic of `runTools` by registering
+    // a transient probe tool that tracks how many concurrent calls
+    // were in flight at peak. If runTools is serial, peak=1; if it's
+    // parallel for safe tools, peak == fan-out.
+    const { runTools } = await import("../core/agenticLoop.js");
+    const { registerMcpTools, clearMcpTools } = await import("../tools/index.js");
+
+    let inflight = 0;
+    let peak = 0;
+    const probeSafe = {
+      name: "ProbeSafe",
+      description: "test probe",
+      inputSchema: { type: "object" as const, properties: {}, additionalProperties: false },
+      async call(): Promise<{ content: string }> {
+        inflight++;
+        if (inflight > peak) peak = inflight;
+        await new Promise((r) => setTimeout(r, 30));
+        inflight--;
+        return { content: "ok" };
+      },
+      isReadOnly: () => true,
+      isEnabled: () => true,
+      isConcurrencySafe: () => true,
+    };
+    let unsafeInflight = 0;
+    let unsafePeak = 0;
+    const probeUnsafe = {
+      name: "ProbeUnsafe",
+      description: "test probe",
+      inputSchema: { type: "object" as const, properties: {}, additionalProperties: false },
+      async call(): Promise<{ content: string }> {
+        unsafeInflight++;
+        if (unsafeInflight > unsafePeak) unsafePeak = unsafeInflight;
+        await new Promise((r) => setTimeout(r, 30));
+        unsafeInflight--;
+        return { content: "ok" };
+      },
+      isReadOnly: () => false,
+      isEnabled: () => true,
+      // explicit: not concurrency-safe (serial)
+      isConcurrencySafe: () => false,
+    };
+    // Reuse the MCP tool channel as a generic "extra tools" slot for
+    // the probes — keeps test isolation clean (one clearMcpTools()
+    // restores the registry to its pristine post-bootstrap state).
+    registerMcpTools([probeSafe, probeUnsafe]);
+    try {
+      // 4 ProbeSafe blocks → should run in parallel (peak >= 2 — and
+      // actually peak === 4 if scheduling is healthy).
+      const safeBlocks = Array.from({ length: 4 }).map((_, i) => ({
+        type: "tool_use" as const,
+        id: `safe-${i}`,
+        name: "ProbeSafe",
+        input: {},
+      }));
+      const safeStart = Date.now();
+      const safeResult = await runTools(
+        safeBlocks,
+        { cwd: process.cwd(), sessionId: "concurrency-test" },
+        { permissionMode: "auto", permissionSettings: { allow: [], deny: [], mode: "auto" }, sessionPermissionRules: { allow: [], deny: [] } },
+      );
+      const safeElapsed = Date.now() - safeStart;
+      assert(safeResult.executions.length === 4, "all 4 safe blocks executed");
+      assert(
+        safeResult.executions.every((e, i) => e.toolUseId === `safe-${i}`),
+        "executions preserve input order",
+      );
+      assert(peak >= 2, `peak concurrent ProbeSafe calls >= 2 (got ${peak})`);
+      assert(
+        safeElapsed < 100,
+        `parallel batch finishes well under serial budget (4×30ms=120ms): got ${safeElapsed}ms`,
+      );
+
+      // 3 ProbeUnsafe blocks → must serialize (peak === 1).
+      const unsafeBlocks = Array.from({ length: 3 }).map((_, i) => ({
+        type: "tool_use" as const,
+        id: `unsafe-${i}`,
+        name: "ProbeUnsafe",
+        input: {},
+      }));
+      await runTools(
+        unsafeBlocks,
+        { cwd: process.cwd(), sessionId: "concurrency-test" },
+        { permissionMode: "auto", permissionSettings: { allow: [], deny: [], mode: "auto" }, sessionPermissionRules: { allow: [], deny: [] } },
+      );
+      assert(unsafePeak === 1, `unsafe tools serialized (peak=${unsafePeak})`);
+
+      // Mixed batch: safe, safe, unsafe, safe, safe — should produce
+      // three batches: [safe,safe] parallel, [unsafe] serial, [safe,safe]
+      // parallel. We don't measure ordering here; just confirm the
+      // executions array is in input order and total = 5.
+      peak = 0;
+      const mixedBlocks = [
+        { type: "tool_use" as const, id: "m0", name: "ProbeSafe", input: {} },
+        { type: "tool_use" as const, id: "m1", name: "ProbeSafe", input: {} },
+        { type: "tool_use" as const, id: "m2", name: "ProbeUnsafe", input: {} },
+        { type: "tool_use" as const, id: "m3", name: "ProbeSafe", input: {} },
+        { type: "tool_use" as const, id: "m4", name: "ProbeSafe", input: {} },
+      ];
+      const mixed = await runTools(
+        mixedBlocks,
+        { cwd: process.cwd(), sessionId: "concurrency-test" },
+        { permissionMode: "auto", permissionSettings: { allow: [], deny: [], mode: "auto" }, sessionPermissionRules: { allow: [], deny: [] } },
+      );
+      assert(mixed.executions.length === 5, "mixed batch: all 5 executed");
+      assert(
+        mixed.executions.map((e) => e.toolUseId).join(",") === "m0,m1,m2,m3,m4",
+        "mixed batch preserves model-emitted input order across batches",
+      );
+    } finally {
+      // Drop the probe tools so the rest of the test suite (and any
+      // downstream consumer of getAllTools()) sees a pristine pool.
+      clearMcpTools();
+    }
+  }
+
+  console.log("\n[16] subAgentProgressStore — turn_usage live token updates");
+  {
+    const {
+      startSubAgentProgress,
+      updateSubAgentProgress,
+      getSubAgentProgress,
+      clearAllSubAgentProgress,
+    } = await import("../state/subAgentProgressStore.js");
+
+    clearAllSubAgentProgress();
+    startSubAgentProgress("live-tok-1", { agentType: "Explore", description: "x" });
+    // Simulate two turn_usage events from runChildAgent:
+    updateSubAgentProgress("live-tok-1", {
+      inputTokens: 1200,
+      outputTokens: 340,
+      totalTokens: 1540,
+    });
+    let live = getSubAgentProgress("live-tok-1");
+    assert(live?.totalTokens === 1540, "live totalTokens after first turn");
+    assert(live?.inputTokens === 1200, "live inputTokens after first turn");
+    assert(live?.outputTokens === 340, "live outputTokens after first turn");
+    assert(live?.status === "running", "live token update doesn't flip status");
+
+    updateSubAgentProgress("live-tok-1", {
+      inputTokens: 2800,
+      outputTokens: 720,
+      totalTokens: 3520,
+    });
+    live = getSubAgentProgress("live-tok-1");
+    assert(live?.totalTokens === 3520, "live totalTokens overwritten by second turn");
+
+    clearAllSubAgentProgress();
+  }
+
   if (failures.length > 0) {
     console.error(`\n${failures.length} assertion(s) failed:`);
     for (const f of failures) console.error(`  - ${f}`);

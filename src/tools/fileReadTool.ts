@@ -102,4 +102,8 @@ export const fileReadTool: Tool = {
   isEnabled(): boolean {
     return true;
   },
+  isConcurrencySafe(): boolean {
+    // Pure stat + read; no shared state. Safe to run N reads in parallel.
+    return true;
+  },
 };

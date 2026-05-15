@@ -60,6 +60,24 @@ export type AgenticLoopEvent =
   | { type: "tool_result_message"; message: MessageParam }
   | { type: "turn_complete"; reason: LoopTerminationReason; turnCount: number }
   | { type: "token_warning"; warning: TokenWarningResult }
+  | {
+      /**
+       * Emitted right after the per-turn streaming API call resolves and
+       * the loop has folded the response usage into its running totals.
+       * `turnUsage` is just this turn's usage; `cumulativeUsage` is
+       * everything spent in this `query()` invocation so far.
+       *
+       * The parent QueryEngine has its own `usage_updated` event for the
+       * top-level loop's bookkeeping; this one exists so sub-agent
+       * runners (`runChildAgent`) can publish live token counts to the
+       * UI store while the sub-agent is still mid-flight, mirroring
+       * Claude Code's per-agent "28.0k tokens" line.
+       */
+      type: "turn_usage";
+      turnUsage: Usage;
+      cumulativeUsage: Usage;
+      turnCount: number;
+    }
   | { type: "error"; error: Error };
 
 export interface AgenticLoopResult {
@@ -92,6 +110,197 @@ export interface RunToolsOptions {
   onPermissionRequest?: (request: PermissionRequest) => Promise<PermissionDecision>;
 }
 
+/**
+ * Maximum number of concurrency-safe tools to run in parallel within a
+ * single batch. Mirrors source's `getMaxToolUseConcurrency()` (default
+ * 10) — high enough to amortize a fan-out across many sub-agents,
+ * low enough that the OS doesn't choke on subprocess explosions.
+ */
+const MAX_TOOL_USE_CONCURRENCY = 10;
+
+interface ToolBatch {
+  isConcurrencySafe: boolean;
+  blocks: ToolUseBlock[];
+}
+
+/**
+ * Partition the assistant's tool_use blocks into ordered batches.
+ *
+ * Mirrors source's `partitionToolCalls` in
+ * claude-code-source-code/src/services/tools/toolOrchestration.ts:91 —
+ * consecutive concurrency-safe blocks coalesce into one parallel
+ * batch; everything else becomes its own singleton batch (which the
+ * runner will execute serially).
+ *
+ * Crucially we MUST keep the original block order across batches so
+ * the `executions` array we hand back, and therefore the
+ * `tool_use_done` events the agentic loop yields, line up with the
+ * order the model's tool_use blocks appeared in the assistant message
+ * (the API also requires tool_results to follow that order).
+ */
+function partitionToolCalls(blocks: ToolUseBlock[]): ToolBatch[] {
+  const batches: ToolBatch[] = [];
+  for (const block of blocks) {
+    const tool = findToolByName(block.name);
+    const safe = !!tool?.isConcurrencySafe?.(
+      (block.input as Record<string, unknown>) ?? {},
+    );
+    const last = batches[batches.length - 1];
+    if (safe && last?.isConcurrencySafe) {
+      last.blocks.push(block);
+    } else {
+      batches.push({ isConcurrencySafe: safe, blocks: [block] });
+    }
+  }
+  return batches;
+}
+
+interface RunOneToolReturn {
+  execution: ToolExecutionResult;
+  permissionRequest?: PermissionRequest;
+}
+
+/**
+ * Run one tool_use block end-to-end: name lookup, permission check,
+ * the actual `tool.call()`, and result truncation. Pure of any
+ * mutation outside its return value — the caller is responsible for
+ * stitching the per-block results into the final `executions` /
+ * `toolResults` / `permissionRequests` arrays in the correct order.
+ *
+ * Extracted from the old monolithic `runTools` body so that batches
+ * of concurrency-safe blocks can be fanned out via `Promise.all`
+ * without duplicating the permission + truncation + activation logic.
+ */
+async function runOneToolBlock(
+  block: ToolUseBlock,
+  context: ToolContext,
+  options: RunToolsOptions,
+): Promise<RunOneToolReturn> {
+  const toolInput = (block.input as Record<string, unknown>) ?? {};
+  const tool = findToolByName(block.name);
+  if (!tool) {
+    const result: ToolResult = {
+      content: `Error: Unknown tool "${block.name}"`,
+      isError: true,
+    };
+    return {
+      execution: { toolUseId: block.id, toolName: block.name, toolInput, result },
+    };
+  }
+
+  try {
+    const liveMode = context.getPermissionMode?.() as PermissionMode | undefined;
+    const permission = await checkPermission({
+      tool,
+      input: toolInput,
+      cwd: context.cwd,
+      mode: liveMode ?? options.permissionMode,
+      settings: options.permissionSettings,
+      sessionRules: options.sessionPermissionRules,
+    });
+
+    if (permission.behavior === "deny") {
+      const result: ToolResult = {
+        content: `Permission denied for ${block.name}: ${permission.reason}`,
+        isError: true,
+      };
+      return {
+        execution: { toolUseId: block.id, toolName: block.name, toolInput, result },
+      };
+    }
+
+    let surfacedRequest: PermissionRequest | undefined;
+    if (permission.behavior === "ask") {
+      surfacedRequest = permission.request;
+      const decision = options.onPermissionRequest
+        ? await options.onPermissionRequest(permission.request)
+        : "deny";
+
+      if (decision === "deny") {
+        const result: ToolResult = {
+          content: `Permission denied for ${block.name}: user rejected the request`,
+          isError: true,
+        };
+        return {
+          execution: { toolUseId: block.id, toolName: block.name, toolInput, result },
+          permissionRequest: surfacedRequest,
+        };
+      }
+
+      if (decision === "allow_always") {
+        const allowRules = options.sessionPermissionRules?.allow;
+        if (allowRules && !allowRules.includes(permission.request.ruleHint)) {
+          allowRules.push(permission.request.ruleHint);
+        }
+      }
+    }
+
+    // Stamp the tool_use id onto the per-call context so tools that
+    // need to publish out-of-band updates (currently just AgentTool's
+    // sub-agent progress store) can correlate their events back to
+    // the right tool-call card in the UI.
+    const callContext: ToolContext = { ...context, toolUseId: block.id };
+    const rawResult = await tool.call(toolInput, callContext);
+    const result: ToolResult = {
+      ...rawResult,
+      content: truncateToolResult(rawResult.content, tool.maxResultSizeChars),
+    };
+
+    if (!result.isError) {
+      const filePaths = extractToolFilePaths(block.name, toolInput);
+      if (filePaths.length > 0) {
+        activateConditionalSkillsForPaths(filePaths, context.cwd);
+      }
+    }
+
+    return {
+      execution: { toolUseId: block.id, toolName: block.name, toolInput, result },
+      ...(surfacedRequest ? { permissionRequest: surfacedRequest } : {}),
+    };
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error
+      ? (error.stack ?? error.message)
+      : String(error);
+    const result: ToolResult = {
+      content: `Error: ${errorMessage}`,
+      isError: true,
+    };
+    return {
+      execution: { toolUseId: block.id, toolName: block.name, toolInput, result },
+    };
+  }
+}
+
+/**
+ * Run an array of concurrency-safe blocks in parallel, capped at
+ * `MAX_TOOL_USE_CONCURRENCY` simultaneous invocations. Promise.all
+ * preserves input order in the resolved array, so the caller can
+ * re-thread the results into the global `executions` order without
+ * extra bookkeeping.
+ *
+ * For batches smaller than the cap we just `Promise.all`; only the
+ * (rare) overflow case spins through chunks. This avoids a surprise
+ * dependency on `p-limit` for the common path.
+ */
+async function runBlocksConcurrently(
+  blocks: ToolUseBlock[],
+  context: ToolContext,
+  options: RunToolsOptions,
+): Promise<RunOneToolReturn[]> {
+  if (blocks.length <= MAX_TOOL_USE_CONCURRENCY) {
+    return Promise.all(blocks.map((b) => runOneToolBlock(b, context, options)));
+  }
+  const out: RunOneToolReturn[] = [];
+  for (let i = 0; i < blocks.length; i += MAX_TOOL_USE_CONCURRENCY) {
+    const chunk = blocks.slice(i, i + MAX_TOOL_USE_CONCURRENCY);
+    const settled = await Promise.all(
+      chunk.map((b) => runOneToolBlock(b, context, options)),
+    );
+    out.push(...settled);
+  }
+  return out;
+}
+
 export async function runTools(
   contentBlocks: ContentBlock[],
   context: ToolContext,
@@ -105,140 +314,50 @@ export async function runTools(
     (block): block is ToolUseBlock => block.type === "tool_use",
   );
 
-  const toolResults: Array<{
-    type: "tool_result";
-    tool_use_id: string;
-    content: string;
-    is_error?: boolean;
-  }> = [];
   const executions: ToolExecutionResult[] = [];
   const permissionRequests: PermissionRequest[] = [];
 
-  for (const block of toolUseBlocks) {
-    const toolInput = (block.input as Record<string, unknown>) ?? {};
-    const tool = findToolByName(block.name);
-    if (!tool) {
-      const result: ToolResult = {
-        content: `Error: Unknown tool "${block.name}"`,
-        isError: true,
-      };
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: block.id,
-        content: result.content,
-        is_error: true,
-      });
-      executions.push({ toolUseId: block.id, toolName: block.name, toolInput, result });
-      continue;
-    }
-
-    try {
-      // Read live permission mode from tool context (updated by Enter/ExitPlanMode)
-      const liveMode = context.getPermissionMode?.() as PermissionMode | undefined;
-      const permission = await checkPermission({
-        tool,
-        input: toolInput,
-        cwd: context.cwd,
-        mode: liveMode ?? options.permissionMode,
-        settings: options.permissionSettings,
-        sessionRules: options.sessionPermissionRules,
-      });
-
-      if (permission.behavior === "deny") {
-        const result: ToolResult = {
-          content: `Permission denied for ${block.name}: ${permission.reason}`,
-          isError: true,
-        };
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: result.content,
-          is_error: true,
-        });
-        executions.push({ toolUseId: block.id, toolName: block.name, toolInput, result });
-        continue;
-      }
-
-      if (permission.behavior === "ask") {
-        permissionRequests.push(permission.request);
-        const decision = options.onPermissionRequest
-          ? await options.onPermissionRequest(permission.request)
-          : "deny";
-
-        if (decision === "deny") {
-          const result: ToolResult = {
-            content: `Permission denied for ${block.name}: user rejected the request`,
-            isError: true,
-          };
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: result.content,
-            is_error: true,
-          });
-          executions.push({ toolUseId: block.id, toolName: block.name, toolInput, result });
-          continue;
-        }
-
-        if (decision === "allow_always") {
-          const allowRules = options.sessionPermissionRules?.allow;
-          if (allowRules && !allowRules.includes(permission.request.ruleHint)) {
-            allowRules.push(permission.request.ruleHint);
-          }
-        }
-      }
-
-      // Stamp the tool_use id onto the per-call context so tools that
-      // need to publish out-of-band updates (currently just AgentTool's
-      // sub-agent progress store) can correlate their events back to
-      // the right tool-call card in the UI.
-      const callContext: ToolContext = { ...context, toolUseId: block.id };
-      const rawResult = await tool.call(toolInput, callContext);
-      const result: ToolResult = {
-        ...rawResult,
-        content: truncateToolResult(rawResult.content, tool.maxResultSizeChars),
-      };
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: block.id,
-        content: result.content,
-        ...(result.isError && { is_error: true }),
-      });
-      executions.push({ toolUseId: block.id, toolName: block.name, toolInput, result });
-
-      // Promote any conditional skills whose `paths` patterns match the
-      // file the model just touched. The activation is sticky for the
-      // remainder of the session — the new skill will appear in the next
-      // system prompt rebuild (next user submit).
-      if (!result.isError) {
-        const filePaths = extractToolFilePaths(block.name, toolInput);
-        if (filePaths.length > 0) {
-          activateConditionalSkillsForPaths(filePaths, context.cwd);
-        }
-      }
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error
-        ? (error.stack ?? error.message)
-        : String(error);
-      const result: ToolResult = {
-        content: `Error: ${errorMessage}`,
-        isError: true,
-      };
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: block.id,
-        content: result.content,
-        is_error: true,
-      });
-      executions.push({ toolUseId: block.id, toolName: block.name, toolInput, result });
+  for (const batch of partitionToolCalls(toolUseBlocks)) {
+    const results = batch.isConcurrencySafe && batch.blocks.length > 1
+      ? await runBlocksConcurrently(batch.blocks, context, options)
+      : await runBlocksSerially(batch.blocks, context, options);
+    for (const r of results) {
+      executions.push(r.execution);
+      if (r.permissionRequest) permissionRequests.push(r.permissionRequest);
     }
   }
+
+  // Build the final tool_results message in the same order as the
+  // original tool_use blocks — the API requires this strict pairing.
+  const toolResults = executions.map((e) => ({
+    type: "tool_result" as const,
+    tool_use_id: e.toolUseId,
+    content: e.result.content,
+    ...(e.result.isError ? { is_error: true } : {}),
+  }));
 
   return {
     toolResultsMessage: { role: "user", content: toolResults as any },
     executions,
     permissionRequests,
   };
+}
+
+/**
+ * Run blocks one-after-the-other. Used for unsafe batches (Write/Edit/
+ * Bash/etc.) where interleaving could corrupt shared state, or for
+ * any singleton batch that didn't qualify for parallel execution.
+ */
+async function runBlocksSerially(
+  blocks: ToolUseBlock[],
+  context: ToolContext,
+  options: RunToolsOptions,
+): Promise<RunOneToolReturn[]> {
+  const out: RunOneToolReturn[] = [];
+  for (const b of blocks) {
+    out.push(await runOneToolBlock(b, context, options));
+  }
+  return out;
 }
 
 export async function* query(
@@ -362,6 +481,15 @@ export async function* query(
       aborted: false,
     };
     yield { type: "assistant_message", message: assistantMessage };
+    // Per-turn usage event — let downstream consumers (notably
+    // runChildAgent → subAgentProgressStore) update live counters
+    // without having to wait for the loop's final return value.
+    yield {
+      type: "turn_usage",
+      turnUsage: { ...lastCallUsage },
+      cumulativeUsage: { ...totalUsage },
+      turnCount: state.turnCount,
+    };
 
     if (stopReason !== "tool_use") {
       yield { type: "turn_complete", reason: "completed", turnCount: state.turnCount };

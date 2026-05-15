@@ -112,6 +112,24 @@ export interface Tool {
 
   /** Whether this tool is available in the current environment. */
   isEnabled(): boolean;
+
+  /**
+   * Whether this tool is safe to run concurrently with other instances of
+   * itself or with other concurrency-safe tools. The agentic loop uses
+   * this to partition a single assistant turn's tool_use blocks into
+   * batches: consecutive concurrency-safe tools form one parallel batch
+   * (run via `Promise.all`); anything else runs serially in its own
+   * singleton batch. Mirrors source's `isConcurrencySafe(input)` flag in
+   * claude-code-source-code/src/tools/AgentTool/AgentTool.tsx.
+   *
+   * Optional — defaults to `false` for safety. Tools that mutate the
+   * filesystem (Write/Edit/Bash/MemoryWrite), the session (TodoWrite,
+   * Skill), or interact with the user (ExitPlanMode) MUST stay false to
+   * avoid interleaving writes or duplicate prompts. Read-only search /
+   * inspection tools (Read/Grep/Glob) and the Agent tool itself (each
+   * sub-agent runs in an isolated context) can opt in to true.
+   */
+  isConcurrencySafe?(input?: Record<string, unknown>): boolean;
 }
 
 /** Truncate tool result content to the specified max size. */

@@ -218,6 +218,27 @@ export const agentTool: Tool = {
                 lastToolIsError: event.isError === true,
               });
               break;
+            case "turn_usage": {
+              // Push the running token total to the store so the
+              // SubAgentCard can render "28.0k tokens" live (matches
+              // Claude Code's per-agent token line). We surface the
+              // FULL accumulated cost — input + output + cache reads
+              // + cache creation — because that's what the user
+              // pays for and what the source counts in
+              // calculateAgentStats (UI.tsx).
+              const u = event.cumulativeUsage;
+              const totalTokens =
+                u.input_tokens +
+                u.output_tokens +
+                (u.cache_creation_input_tokens ?? 0) +
+                (u.cache_read_input_tokens ?? 0);
+              updateSubAgentProgress(progressKey, {
+                inputTokens: u.input_tokens,
+                outputTokens: u.output_tokens,
+                totalTokens,
+              });
+              break;
+            }
             default:
               break;
           }
@@ -285,6 +306,20 @@ export const agentTool: Tool = {
   },
 
   isEnabled(): boolean {
+    return true;
+  },
+
+  /**
+   * Mirrors source (`AgentTool.tsx → isConcurrencySafe()` returns true).
+   * Each sub-agent runs in its own isolated context and the only shared
+   * state it touches — the parent's permission settings + session rules
+   * + the per-call entry in subAgentProgressStore — is keyed by the
+   * tool_use id, so two concurrent Agent invocations cannot collide.
+   * This is the change that lets the model fan out N independent
+   * sub-agents in a single assistant turn (e.g. "review code" + "audit
+   * security" in parallel) instead of waiting on each one in series.
+   */
+  isConcurrencySafe(): boolean {
     return true;
   },
 };

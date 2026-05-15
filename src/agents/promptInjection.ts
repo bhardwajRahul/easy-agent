@@ -5,7 +5,11 @@
  * the three-tier degradation the skills formatter has.
  *
  * The block goes into the dynamic section of the system prompt so the
- * model knows what `subagent_type` values it can pass to the Agent tool.
+ * model knows what `subagent_type` values it can pass to the Agent tool,
+ * and — equally important — what the on-disk format is when the user
+ * asks the model to define a brand-new sub-agent. Without that second
+ * half, models tend to fall back to `.yaml` / `.json` from their training
+ * data and the loader silently ignores the file.
  */
 
 import type { AgentDefinition } from "./types.js";
@@ -19,9 +23,53 @@ function truncate(s: string, max: number): string {
 }
 
 /**
+ * The "creation" block — appended to every reminder so the model has the
+ * format spec on hand the moment a user asks "make me a new sub-agent".
+ *
+ * Why bake it into the same reminder instead of a separate prompt section:
+ *   The agent listing already lives in dynamic prompt space and reads
+ *   right above this. Splitting them would force the model to cross-
+ *   reference two distant blocks. Keeping definition + creation in one
+ *   reminder also means a single cache bust on agent reload, not two.
+ */
+const CREATION_GUIDANCE = [
+  "",
+  "Defining a new sub-agent (when the user asks you to create / scaffold one):",
+  "- File path: `<cwd>/.easy-agent/agents/<name>.md` (project-scope, default)",
+  "                or `~/.easy-agent/agents/<name>.md` (user-scope, shared across projects)",
+  "- File extension MUST be `.md` — `.yaml` / `.json` / `.txt` files are ignored by the loader.",
+  "- Format: a Markdown file with a YAML frontmatter header followed by the system prompt body.",
+  "- Required frontmatter fields: `name` (sub-agent identifier), `description` (whenToUse text shown to the dispatching agent).",
+  "- Optional frontmatter fields: `tools` (CSV or YAML list — explicit allow-list; omit for wildcard),",
+  "  `disallowedTools` (CSV or YAML list — strip from the wildcard pool, e.g. Write/Edit for read-only agents),",
+  "  `model` (override; falls back to parent's), `maxTurns` (positive integer), `permissionMode` (default | plan | auto).",
+  "- The Markdown body BELOW the frontmatter IS the sub-agent's system prompt — no extra wrapping needed.",
+  "- After writing, the user must restart easy-agent for the registry to pick the new file up.",
+  "",
+  "Template — copy verbatim and edit:",
+  "```markdown",
+  "---",
+  "name: \"my-agent\"",
+  "description: \"One-sentence whenToUse — the dispatching agent reads this to decide whether to delegate.\"",
+  "tools: \"Read,Grep,Glob\"",
+  "disallowedTools: \"Write,Edit\"",
+  "model: \"claude-sonnet-4-5\"",
+  "maxTurns: 20",
+  "permissionMode: \"default\"",
+  "---",
+  "You are <role>. Your job is <one-sentence mission>.",
+  "",
+  "<Detailed instructions, output format, constraints — same shape as the built-in",
+  "general-purpose / Explore prompts you can read at src/agents/builtIn/.>",
+  "```",
+].join("\n");
+
+/**
  * Render the "available sub-agents" system-reminder block. Returns an
  * empty string when there are no agents loaded (so callers can
- * unconditionally concatenate without producing trailing whitespace).
+ * unconditionally concatenate without producing trailing whitespace) —
+ * in practice this is dead code since the registry always ships the
+ * two built-ins, but the contract is preserved for callers and tests.
  */
 export function formatAgentsSystemReminder(agents: AgentDefinition[]): string {
   if (agents.length === 0) return "";
@@ -53,6 +101,7 @@ export function formatAgentsSystemReminder(agents: AgentDefinition[]): string {
     "Sub-agents do NOT see the main conversation history, so the `prompt` must be self-contained.",
     "",
     ...lines,
+    CREATION_GUIDANCE,
     "</system-reminder>",
   ].join("\n");
 }

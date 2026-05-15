@@ -78,4 +78,8 @@ export const globTool: Tool = {
   isEnabled(): boolean {
     return true;
   },
+  isConcurrencySafe(): boolean {
+    // Pure directory walk via fast-glob; no shared state.
+    return true;
+  },
 };

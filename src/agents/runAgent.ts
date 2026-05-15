@@ -46,7 +46,20 @@ export type AgentProgressEvent =
   | { type: "tool_use_done"; toolName: string; isError?: boolean }
   | { type: "text"; text: string }
   | { type: "error"; text: string }
-  | { type: "turn_complete"; reason: LoopTerminationReason };
+  | { type: "turn_complete"; reason: LoopTerminationReason }
+  | {
+      /**
+       * Per-turn usage delta forwarded out of the inner agentic loop.
+       * `cumulativeUsage` is everything the sub-agent has spent so far
+       * (input + output + cache). The parent's AgentTool publishes this
+       * to subAgentProgressStore so the SubAgentCard can show "28.0k
+       * tokens" updating LIVE while the sub-agent is still working —
+       * matching the per-agent token line in Claude Code's UI.
+       */
+      type: "turn_usage";
+      cumulativeUsage: Usage;
+      turnCount: number;
+    };
 
 export interface RunChildAgentParams {
   agentDefinition: AgentDefinition;
@@ -182,6 +195,13 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
           break;
         case "turn_complete":
           params.onProgress({ type: "turn_complete", reason: value.reason });
+          break;
+        case "turn_usage":
+          params.onProgress({
+            type: "turn_usage",
+            cumulativeUsage: value.cumulativeUsage,
+            turnCount: value.turnCount,
+          });
           break;
         default:
           break;
