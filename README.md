@@ -22,9 +22,9 @@ Core goals:
 
 ## Project Status
 
-**Current stage:** foundational implementation in active development
+**Current stage:** Stage 20 — background agents and worktree isolation, in active development
 
-The project already has meaningful groundwork across the CLI, streaming communication, tool execution, terminal UI, and session orchestration layers. At the same time, many advanced systems in the full recreation plan are still under active development.
+The project has completed the tutorial-friendly implementation track through Stage 19, including the CLI, streaming communication, tool execution, terminal UI, session orchestration, context management, MCP, skills, sandboxing, and sub-agents. Stage 20 is currently being implemented: background sub-agent execution, completion notifications, output files, and git worktree isolation.
 
 Easy Agent should currently be understood as a serious open-source rebuild in progress rather than a finished end-user product.
 
@@ -67,11 +67,14 @@ easy-agent/
 │   ├── entrypoint/      # CLI bootstrap
 │   ├── ui/              # React/Ink terminal interface
 │   ├── core/            # agentic loop and query orchestration
+│   ├── agents/          # sub-agent definitions, registry, and runners
 │   ├── tools/           # local tools and tool registry
-│   ├── services/api/    # model client and streaming wrapper
+│   ├── services/        # model API, MCP, and skills services
 │   ├── permissions/     # permission and safety controls
 │   ├── context/         # system prompt and context management
+│   ├── sandbox/         # Bash sandbox profiles and wrapping
 │   ├── session/         # session persistence and history
+│   ├── state/           # UI/runtime stores for tasks, todos, agents
 │   ├── types/           # shared domain types
 │   └── utils/           # env, config, logging, helpers
 ├── package.json
@@ -82,7 +85,7 @@ easy-agent/
 
 ## Roadmap and Progress
 
-The project follows a 30-phase roadmap designed to recreate the full Claude Code-style system progressively.
+The project follows a 31-phase roadmap designed to recreate the full Claude Code-style system progressively.
 
 | Phase | Area | Core Code | Status |
 |---|---|---|---:|
@@ -105,9 +108,9 @@ The project follows a 30-phase roadmap designed to recreate the full Claude Code
 | 16 | MCP protocol support | [`step/step16.js`](./step/step16.js) | ✅ Done |
 | 17 | Skills system | [`step/step17.js`](./step/step17.js) | ✅ Done |
 | 18 | Sandbox | [`step/step18.js`](./step/step18.js) | ✅ Done |
-| 19 | Sub-agents | `planned` | ⏳ Not started |
-| 20 | Custom agent system | `planned` | ⏳ Not started |
-| 21 | Multi-agent collaboration | `planned` | ⏳ Not started |
+| 19 | Sub-Agent and agent definitions | [`step/step19.js`](./step/step19.js) | ✅ Done |
+| 20 | Background agents and worktree isolation | `src/agents/runAsyncAgent.ts`, `src/utils/worktree.ts` | 🚧 In progress |
+| 21 | Agent Teams / multi-agent collaboration | `planned` | ⏳ Not started |
 | 22 | Hooks lifecycle system | `planned` | ⏳ Not started |
 | 23 | Terminal UI upgrades | `planned in step series` | 🚧 Partial |
 | 24 | Configuration system improvements | `planned in step series` | 🚧 Partial |
@@ -119,6 +122,12 @@ The project follows a 30-phase roadmap designed to recreate the full Claude Code
 | 30 | Packaging, publishing, and documentation | `planned in step series` | 🚧 Partial |
 
 The [`easy-agent/step/`](./step/) directory contains tutorial-friendly milestone code, so each completed chapter is directly learnable and reproducible from a focused single file.
+
+Current implementation notes:
+
+- Stage 19 is complete in source, article form, and the step snapshot.
+- Stage 20 has active source work for async sub-agents, notifications, output files, and worktree isolation, but its tutorial article and step snapshot are not complete yet.
+- Stage 21 Agent Teams remains planned and intentionally separate from Stage 20.
 
 ## What Easy Agent Is — and Is Not
 
@@ -183,12 +192,11 @@ agent --dump-system-prompt
 
 The next major milestones are:
 
-1. a fuller plan-mode workflow
-2. task management system
-3. extensibility primitives beyond MCP and skills
-4. configuration improvements beyond the current sandbox and permission model
-5. sub-agent and multi-agent collaboration
-6. multi-provider architecture
+1. finish Stage 20 background Agent execution and worktree isolation
+2. write the Stage 20 tutorial article and `step/step20.js`
+3. implement Stage 21 Agent Teams as a separate collaboration layer
+4. continue Hooks, UI, and configuration improvements
+5. move toward pipe mode, Auto Mode, and multi-provider architecture
 
 ## Contribution Policy
 

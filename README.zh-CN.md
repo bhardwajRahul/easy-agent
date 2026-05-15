@@ -22,9 +22,9 @@ Easy Agent 的目标，是成为一个严肃的、可持续演进的、本地 Co
 
 ## 当前状态
 
-**当前阶段：** 基础实现已经建立，项目正在持续推进
+**当前阶段：** 阶段 20 —— 后台 Agent 与 Worktree 隔离，开发中
 
-当前项目已经在 CLI、流式通信、工具执行、终端 UI、会话编排等方向完成了较有价值的基础建设。但完整复刻目标中的许多高级系统仍在持续开发中。
+当前项目已经完成到阶段 19 的教程化实现主线，包括 CLI、流式通信、工具执行、终端 UI、会话编排、上下文管理、MCP、Skills、Sandbox 和 Sub-Agent。阶段 20 正在开发中，重点是后台子 Agent 执行、完成通知、输出文件，以及 Git Worktree 隔离。
 
 因此，当前的 Easy Agent 更适合被理解为一个正在稳步推进的开源复刻工程，而不是已经面向终端用户完全交付的成品。
 
@@ -67,11 +67,14 @@ easy-agent/
 │   ├── entrypoint/      # CLI 启动入口
 │   ├── ui/              # React/Ink 终端界面
 │   ├── core/            # agentic loop 与 query orchestration
+│   ├── agents/          # 子 Agent 定义、注册表与运行器
 │   ├── tools/           # 本地工具与工具注册系统
-│   ├── services/api/    # 模型客户端与 streaming 包装
+│   ├── services/        # 模型 API、MCP 与 Skills 服务
 │   ├── permissions/     # 权限与安全控制
 │   ├── context/         # system prompt 与上下文管理
+│   ├── sandbox/         # Bash 沙箱 profile 与命令包装
 │   ├── session/         # 会话持久化与历史
+│   ├── state/           # Todo、Task、Agent 等运行时状态
 │   ├── types/           # 共享领域类型
 │   └── utils/           # env、config、log、辅助函数
 ├── package.json
@@ -82,7 +85,7 @@ easy-agent/
 
 ## 路线图与当前进度
 
-项目遵循一个 30 阶段路线图，以渐进方式完整复刻 Claude Code 风格系统。
+项目遵循一个 31 阶段路线图，以渐进方式完整复刻 Claude Code 风格系统。
 
 | 阶段 | 模块 | 核心代码 | 状态 |
 |---|---|---|---:|
@@ -105,9 +108,9 @@ easy-agent/
 | 16 | MCP 协议支持 | [`step/step16.js`](./step/step16.js) | ✅ 已完成 |
 | 17 | Skills 系统 | [`step/step17.js`](./step/step17.js) | ✅ 已完成 |
 | 18 | Sandbox | [`step/step18.js`](./step/step18.js) | ✅ 已完成 |
-| 19 | Sub-Agent | `planned` | ⏳ 未开始 |
-| 20 | 自定义 Agent 系统 | `planned` | ⏳ 未开始 |
-| 21 | 多 Agent 协作 | `planned` | ⏳ 未开始 |
+| 19 | Sub-Agent 与 Agent 定义系统 | [`step/step19.js`](./step/step19.js) | ✅ 已完成 |
+| 20 | 后台执行与 Worktree 隔离 | `src/agents/runAsyncAgent.ts`, `src/utils/worktree.ts` | 🚧 开发中 |
+| 21 | Agent Teams / 多 Agent 协作 | `planned` | ⏳ 未开始 |
 | 22 | Hooks 生命周期系统 | `planned` | ⏳ 未开始 |
 | 23 | 终端 UI 升级 | `planned in step series` | 🚧 部分完成 |
 | 24 | 配置系统完善 | `planned in step series` | 🚧 部分完成 |
@@ -119,6 +122,12 @@ easy-agent/
 | 30 | 打包发布与文档 | `planned in step series` | 🚧 部分完成 |
 
 [`easy-agent/step/`](./step/) 目录中已经补充了教程化的里程碑核心代码，意味着每个已完成章节都可以直接对照学习、逐步复刻。
+
+当前实现进度补充：
+
+- 阶段 19 已在源码、文章和 step 快照中完成。
+- 阶段 20 已有后台 Agent、通知、输出文件、Worktree 隔离相关源码开发，但教程文章和 `step/step20.js` 尚未完成。
+- 阶段 21 Agent Teams 仍处于计划阶段，并且会和阶段 20 保持边界清晰。
 
 ## Easy Agent 是什么，以及它不是什么
 
@@ -183,12 +192,11 @@ agent --dump-system-prompt
 
 接下来最重要的几个里程碑是：
 
-1. 更完整的 Plan Mode 工作流
-2. 任务管理系统
-3. MCP 与 Skills 之外的扩展机制
-4. 当前 Sandbox 与权限模型之外的配置体系完善
-5. Sub-Agent 与多 Agent 协作
-6. 多 Provider 架构
+1. 完成阶段 20 的后台 Agent 执行与 Worktree 隔离
+2. 补齐阶段 20 教程文章和 `step/step20.js`
+3. 实现阶段 21 Agent Teams 多 Agent 协作层
+4. 继续推进 Hooks、终端 UI 与配置系统完善
+5. 继续向管道模式、Auto Mode 和多 Provider 架构演进
 
 ## 贡献策略
 
