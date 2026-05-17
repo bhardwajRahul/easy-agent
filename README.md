@@ -22,9 +22,9 @@ Core goals:
 
 ## Project Status
 
-**Current stage:** Stage 21 — Agent Teams / multi-agent collaboration, next
+**Current stage:** Stage 22 — Hooks lifecycle system, next
 
-The project has completed the tutorial-friendly implementation track through Stage 20, including the CLI, streaming communication, tool execution, terminal UI, session orchestration, context management, MCP, skills, sandboxing, sub-agents, background agent execution, completion notifications, output files, and git worktree isolation. Stage 21 is the next major planned area: Agent Teams / multi-agent collaboration.
+The project has completed the tutorial-friendly implementation track through Stage 21, including the CLI, streaming communication, tool execution, terminal UI, session orchestration, context management, MCP, skills, sandboxing, sub-agents, background agent execution, git worktree isolation, and Agent Teams / multi-agent collaboration. Stage 22 is the next major planned area: lifecycle hooks.
 
 Easy Agent should currently be understood as a serious open-source rebuild in progress rather than a finished end-user product.
 
@@ -110,7 +110,7 @@ The project follows a 31-phase roadmap designed to recreate the full Claude Code
 | 18 | Sandbox | [`step/step18.js`](./step/step18.js) | ✅ Done |
 | 19 | Sub-Agent and agent definitions | [`step/step19.js`](./step/step19.js) | ✅ Done |
 | 20 | Background agents and worktree isolation | [`step/step20.js`](./step/step20.js) | ✅ Done |
-| 21 | Agent Teams / multi-agent collaboration | `planned` | ⏳ Not started |
+| 21 | Agent Teams / multi-agent collaboration | [`step/step21.js`](./step/step21.js) | ✅ Done |
 | 22 | Hooks lifecycle system | `planned` | ⏳ Not started |
 | 23 | Terminal UI upgrades | `planned in step series` | 🚧 Partial |
 | 24 | Configuration system improvements | `planned in step series` | 🚧 Partial |
@@ -125,8 +125,8 @@ The [`easy-agent/step/`](./step/) directory contains tutorial-friendly milestone
 
 Current implementation notes:
 
-- Stage 20 is complete in source and the step snapshot.
-- Stage 21 Agent Teams remains planned and intentionally separate from Stage 20.
+- Stage 21 is complete in source and the step snapshot.
+- Stage 22 Hooks remains planned and intentionally separate from Agent Teams.
 
 ## What Easy Agent Is — and Is Not
 
@@ -191,9 +191,9 @@ agent --dump-system-prompt
 
 The next major milestones are:
 
-1. implement Stage 21 Agent Teams as a separate collaboration layer
-2. write the Stage 21 tutorial article and `step/step21.js`
-3. continue Hooks, UI, and configuration improvements
+1. implement Stage 22 Hooks lifecycle system
+2. write the Stage 22 tutorial article and `step/step22.js`
+3. continue terminal UI and configuration improvements
 4. move toward pipe mode, Auto Mode, and multi-provider architecture
 
 ## Contribution Policy
