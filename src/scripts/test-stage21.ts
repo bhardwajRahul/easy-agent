@@ -79,6 +79,22 @@ import { formatTeamSystemReminder } from "../agents/teamPromptInjection.js";
 import type { ToolContext } from "../tools/Tool.js";
 import { setAgents } from "../agents/registry.js";
 import { getBuiltInAgents } from "../agents/builtIn/index.js";
+import {
+  closeTeammateView,
+  commitTeammateView,
+  getTeammateViewState,
+  openTeammatePicker,
+  setPickerSelection,
+  subscribeTeammateView,
+} from "../state/teammateViewStore.js";
+import {
+  appendTaskOutput,
+  ensureTaskOutputFile,
+} from "../utils/taskOutput.js";
+import {
+  formatRecordLine,
+  readTaskOutputEvents,
+} from "../utils/taskOutputReader.js";
 
 // ─── Test plumbing ──────────────────────────────────────────────────
 
@@ -797,6 +813,169 @@ async function main(): Promise<void> {
       clearActiveTeam();
       await cleanupTeamDirectory("render-team");
     });
+  });
+
+  // ─── [11] teammateViewStore — state machine ─────────────────────
+  console.log("\n[11] teammateViewStore — state machine + subscribe");
+
+  closeTeammateView();
+  assert(getTeammateViewState().mode === "main", "starts in main mode");
+
+  let viewNotifies = 0;
+  const unsubView = subscribeTeammateView(() => {
+    viewNotifies++;
+  });
+
+  openTeammatePicker("agent-a");
+  assert(getTeammateViewState().mode === "selecting", "openPicker → selecting");
+  assert(
+    getTeammateViewState().selectedAgentId === "agent-a",
+    "openPicker stores initial cursor",
+  );
+  assert(viewNotifies >= 1, "subscriber fired on open");
+
+  setPickerSelection("agent-b");
+  assert(
+    getTeammateViewState().selectedAgentId === "agent-b",
+    "setPickerSelection moves cursor",
+  );
+
+  // setPickerSelection to same agent is a no-op (no extra notify)
+  const beforeNoop = viewNotifies;
+  setPickerSelection("agent-b");
+  assert(viewNotifies === beforeNoop, "setPickerSelection no-op when unchanged");
+
+  commitTeammateView("agent-b");
+  assert(getTeammateViewState().mode === "viewing", "commit → viewing");
+  assert(
+    getTeammateViewState().viewingAgentId === "agent-b",
+    "commit stores viewing target",
+  );
+  assert(
+    getTeammateViewState().selectedAgentId === null,
+    "commit clears picker cursor",
+  );
+
+  closeTeammateView();
+  assert(getTeammateViewState().mode === "main", "close returns to main");
+  assert(getTeammateViewState().viewingAgentId === null, "close clears target");
+
+  // Second close from main → no extra notify
+  const beforeIdempotent = viewNotifies;
+  closeTeammateView();
+  assert(
+    viewNotifies === beforeIdempotent,
+    "close from main is no-op (no notify)",
+  );
+
+  // openTeammatePicker(null) closes the view (called when no agents
+  // are running).
+  openTeammatePicker("agent-c");
+  assert(getTeammateViewState().mode === "selecting", "picker open for test");
+  openTeammatePicker(null);
+  assert(
+    getTeammateViewState().mode === "main",
+    "openTeammatePicker(null) returns to main",
+  );
+
+  unsubView();
+
+  // ─── [12] taskOutputReader — JSONL parse + formatting ──────────
+  console.log("\n[12] taskOutputReader — read + format");
+
+  await withTempHome(async () => {
+    const sessionId = "test-session";
+    const agentId = "tester-1";
+    const filePath = await ensureTaskOutputFile(sessionId, agentId);
+
+    // Empty file → empty record list.
+    const empty = await readTaskOutputEvents(filePath);
+    assert(empty.length === 0, "empty .output file → no records");
+
+    // Append a few real events.
+    await appendTaskOutput(filePath, {
+      type: "started",
+      agentType: "general-purpose",
+      description: "test task",
+      prompt: "hello",
+    });
+    await appendTaskOutput(filePath, { type: "text", text: "Working on it" });
+    await appendTaskOutput(filePath, {
+      type: "tool_use",
+      toolName: "Read",
+    });
+    await appendTaskOutput(filePath, {
+      type: "tool_result",
+      toolName: "Read",
+      isError: false,
+      preview: "file contents here",
+    });
+    await appendTaskOutput(filePath, {
+      type: "completed",
+      reason: "completed",
+      finalText: "done",
+      durationMs: 1234,
+      totalTokens: 567,
+      toolUseCount: 1,
+    });
+
+    const records = await readTaskOutputEvents(filePath);
+    assert(records.length === 5, "5 records read back");
+    assert(records[0]?.event.type === "started", "first event is 'started'");
+    assert(records[4]?.event.type === "completed", "last event is 'completed'");
+
+    // formatRecordLine — spot-check each branch.
+    const started = formatRecordLine(records[0]!);
+    assert(started.startsWith("⏵ Started"), "started line starts with ⏵");
+    assert(
+      started.includes("general-purpose"),
+      "started line includes agentType",
+    );
+
+    const text = formatRecordLine(records[1]!);
+    assert(text === "Working on it", "text line is the raw text");
+
+    const toolUse = formatRecordLine(records[2]!);
+    assert(toolUse === "⚡ Read", "tool_use line has glyph + name");
+
+    const toolResult = formatRecordLine(records[3]!);
+    assert(
+      toolResult.startsWith("  └ ok"),
+      "tool_result success line uses └ ok prefix",
+    );
+
+    const completed = formatRecordLine(records[4]!);
+    assert(completed.startsWith("✓ Done"), "completed line uses ✓ glyph");
+    assert(
+      completed.includes("1234ms"),
+      "completed line includes durationMs",
+    );
+
+    // Robustness: a partial last line shouldn't crash the parser.
+    await fs.appendFile(filePath, '{"timestamp":"2026-01-01T00:00:00Z","type":"text","text":"incomplete'); // no closing brace + no newline
+    const robust = await readTaskOutputEvents(filePath);
+    assert(
+      robust.length === 5,
+      "partial last line is dropped, valid records preserved",
+    );
+
+    // Truncated text (>160 chars) gets ellipsis.
+    const longRec = {
+      timestamp: "2026-01-01T00:00:00Z",
+      event: { type: "text", text: "a".repeat(200) } as const,
+    };
+    const longLine = formatRecordLine(longRec);
+    assert(
+      longLine.length <= 161,
+      "long text truncated to ≤161 chars (160 + ellipsis)",
+    );
+    assert(longLine.endsWith("…"), "truncation marker is the ellipsis char");
+
+    // ENOENT → []
+    const missing = await readTaskOutputEvents(
+      path.join(path.dirname(filePath), "does-not-exist.output"),
+    );
+    assert(missing.length === 0, "missing file → empty list (not throw)");
   });
 
   // ─── Summary ────────────────────────────────────────────────────

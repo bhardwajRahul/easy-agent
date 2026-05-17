@@ -338,21 +338,36 @@ export async function checkPermission(params: PermissionCheckParams): Promise<Pe
     return { behavior: "allow", reason: "auto mode allows all operations", request };
   }
 
-  // TodoWrite and the Task V2 tools only mutate planning state — either
-  // the in-memory todo list or the ~/.easy-agent/tasks directory — with
-  // no filesystem or shell side effects on the user's workspace. They
-  // never need user approval in any mode. This mirrors source code's
-  // `shouldDefer: true` + `checkPermissions: () => allow` combo and
-  // keeps these tools usable inside Plan Mode so the model can draft
-  // and iterate on the plan itself.
+  // Always-allow set — tools whose side effects are confined to
+  // Easy Agent's own ~/.easy-agent state directory and never touch the
+  // user's workspace. They are auto-approved in every mode (including
+  // Plan Mode) so the model can plan / coordinate without UI prompts.
+  //
+  // Two groups:
+  //   1. TodoWrite + Task V2 tools  →  planning state only
+  //   2. Agent Teams (Stage 21)     →  team file + mailbox under
+  //      ~/.easy-agent/teams. Mirrors Claude Code source's
+  //      `SAFE_YOLO_ALLOWLISTED_TOOLS` set in
+  //      utils/permissions/classifierDecision.ts:78-83, whose comment
+  //      reads: "Swarm coordination (internal mailbox/team state only
+  //      — teammates have their own permission checks, so no actual
+  //      security bypass)."
+  //
+  //      Note: TeamDelete additionally cleans up agent-owned git
+  //      worktrees, but `removeAgentWorktree` refuses to delete dirty
+  //      ones — so the user's uncommitted work is never destroyed
+  //      without their consent.
   if (
     params.tool.name === "TodoWrite" ||
     params.tool.name === "TaskCreate" ||
     params.tool.name === "TaskUpdate" ||
     params.tool.name === "TaskGet" ||
-    params.tool.name === "TaskList"
+    params.tool.name === "TaskList" ||
+    params.tool.name === "TeamCreate" ||
+    params.tool.name === "TeamDelete" ||
+    params.tool.name === "SendMessage"
   ) {
-    return { behavior: "allow", reason: `${params.tool.name} writes planning-only state`, request };
+    return { behavior: "allow", reason: `${params.tool.name} writes coordination-only state`, request };
   }
 
   // Plan mode: allow read-only tools, plan mode tools, plan file writes; deny everything else

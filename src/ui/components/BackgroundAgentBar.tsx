@@ -48,10 +48,17 @@ function formatNumber(n: number): string {
 
 /**
  * Build the per-agent inline summary, e.g. "Explore (3 tools, 1.2k
- * tokens, 4s)". The `agentType` is enough for the user to recognise
- * which sub-agent is which — `description` is omitted to keep each
- * entry short enough for a single line. Users who want details look at
- * the .output file or wait for the task-notification.
+ * tokens, 4s)". `description` is omitted to keep each entry short
+ * enough for a single line. Users who want details look at the
+ * .output file or wait for the task-notification.
+ *
+ * Label selection (stage 21):
+ *   - Plain sub-agent      → "<agentType>"             e.g. "Explore"
+ *   - Agent Teams teammate → "<name> · <agentType>"    e.g. "backend · general-purpose"
+ *
+ * Same reasoning as SubAgentCard: a team of 3 `general-purpose`
+ * teammates would otherwise render as three identical entries and
+ * the user couldn't tell which is which.
  */
 function summariseAgent(agent: AsyncAgentEntry, now: number): string {
   const parts: string[] = [];
@@ -72,7 +79,10 @@ function summariseAgent(agent: AsyncAgentEntry, now: number): string {
   if (agent.lastToolName) {
     parts.push(`last: ${agent.lastToolName}`);
   }
-  return `${agent.agentType}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
+  const label = agent.teammateName
+    ? `${agent.teammateName} · ${agent.agentType}`
+    : agent.agentType;
+  return `${label}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
 }
 
 export function BackgroundAgentBar({

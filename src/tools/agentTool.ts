@@ -463,6 +463,9 @@ export const agentTool: Tool = {
       const entry = registerAsyncAgent({
         agentId,
         agentType,
+        ...(teammateIdentity
+          ? { teammateName: teammateIdentity.agentName }
+          : {}),
         ...(description ? { description } : {}),
         prompt,
         outputFile,
@@ -587,6 +590,9 @@ export const agentTool: Tool = {
     if (progressKey) {
       startSubAgentProgress(progressKey, {
         agentType,
+        ...(teammateIdentity
+          ? { teammateName: teammateIdentity.agentName }
+          : {}),
         ...(description ? { description } : {}),
       });
     }

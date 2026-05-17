@@ -98,11 +98,23 @@ export function SubAgentCard({ toolCall }: SubAgentCardProps): React.ReactNode {
   const { glyph, color } = statusGlyph(progress.status);
   const isRunning = progress.status === "running";
 
-  // Header line: glyph + Agent[type] + description + status tag.
-  // Agent type is the most useful piece of information at a glance —
-  // it tells the user whether this was Explore, general-purpose, or a
-  // custom sub-agent — so we show it bold-bracketed right after the
-  // glyph (mirrors source's "Agent · type" layout).
+  // Header line: glyph + Agent[<label>] + description + status tag.
+  //
+  // Label selection:
+  //   - Plain sub-agent              → "[<agentType>]"      e.g. "[Explore]"
+  //   - Agent Teams teammate         → "[<name> · <agentType>]"
+  //                                    e.g. "[backend · general-purpose]"
+  //
+  // The teammate `name` is the only thing that distinguishes one
+  // teammate from another when several share the same agentType
+  // (e.g. backend + frontend + reviewer all running `general-purpose`).
+  // Without it the UI shows three identical "Agent[general-purpose]"
+  // cards and the user can't tell which is which. The agentType still
+  // travels along after a "·" because seeing the underlying agent
+  // definition is useful for debugging custom roles.
+  const label = progress.teammateName
+    ? `${progress.teammateName} · ${progress.agentType}`
+    : progress.agentType;
   const header = (
     <Box>
       <Text color={color}>
@@ -111,7 +123,7 @@ export function SubAgentCard({ toolCall }: SubAgentCardProps): React.ReactNode {
         {" Agent"}
       </Text>
       <Text bold color={color}>
-        {`[${progress.agentType}]`}
+        {`[${label}]`}
       </Text>
       {progress.description ? (
         <Text>{`  ${progress.description}`}</Text>

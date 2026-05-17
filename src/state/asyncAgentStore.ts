@@ -36,6 +36,13 @@ export type AsyncAgentStatus = "running" | "completed" | "failed" | "killed";
 export interface AsyncAgentEntry {
   agentId: string;
   agentType: string;
+  /**
+   * Stage 21 — teammate handle when launched via `Agent({ name, team_name })`.
+   * The `BackgroundAgentBar` prefers this to `agentType` because multiple
+   * teammates of the same agentType (e.g. several `general-purpose`
+   * teammates with different roles) would otherwise be indistinguishable.
+   */
+  teammateName?: string;
   description?: string;
   prompt: string;
   /** ISO timestamp at register(). */
@@ -85,6 +92,7 @@ function notify(agentId: string, snapshot: AsyncAgentEntry | null): void {
 export interface RegisterAsyncAgentInit {
   agentId: string;
   agentType: string;
+  teammateName?: string;
   description?: string;
   prompt: string;
   outputFile: string;
@@ -107,6 +115,7 @@ export function registerAsyncAgent(init: RegisterAsyncAgentInit): AsyncAgentEntr
   const entry: AsyncAgentEntry = {
     agentId: init.agentId,
     agentType: init.agentType,
+    ...(init.teammateName ? { teammateName: init.teammateName } : {}),
     ...(init.description ? { description: init.description } : {}),
     prompt: init.prompt,
     startedAt: new Date().toISOString(),

@@ -9,10 +9,14 @@ import { ModeSelector } from "./components/ModeSelector.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { SystemPanel } from "./components/SystemPanel.js";
 import { TaskList } from "./components/TaskList.js";
+import { TeammatePicker } from "./components/TeammatePicker.js";
+import { TeammateViewer } from "./components/TeammateViewer.js";
 import { TodoList } from "./components/TodoList.js";
 import { ToolCallList } from "./components/ToolCallList.js";
 import { usePromptInput } from "./hooks/usePromptInput.js";
 import { useAgentSession } from "./hooks/useAgentSession.js";
+import { useTeammateNavigation } from "./hooks/useTeammateNavigation.js";
+import { useTeammateView } from "./hooks/useTeammateViewState.js";
 import { getAllUserInvocableSkills } from "../services/skills/registry.js";
 import type { CommandSuggestion } from "./types.js";
 
@@ -76,19 +80,61 @@ export function App({ model, permissionMode, shouldResume, resumeSessionId }: Ap
     onPermissionDecision: actions.resolvePermission,
   });
 
+  // Stage 21 — teammate-view state machine. `view.mode` ∈ {main,
+  // selecting, viewing} controls whether the user is looking at the
+  // main conversation, the picker overlay, or one teammate's
+  // transcript. The keyboard hook below registers the Shift+↑/↓ /
+  // Enter / Esc / 'k' bindings (mirrors source's
+  // useBackgroundTaskNavigation).
+  //
+  // Disable navigation while a permission prompt is up — Esc on a
+  // permission dialog must dismiss the dialog, not the teammate view.
+  // Also disabled while the picker would have no targets (no running
+  // teammates).
+  const view = useTeammateView(state.asyncAgents);
+  useTeammateNavigation({
+    agents: state.asyncAgents,
+    disabled: Boolean(state.permissionPrompt),
+  });
+  const viewedAgent =
+    view.mode === "viewing" && view.viewingAgentId
+      ? state.asyncAgents.find((a) => a.agentId === view.viewingAgentId) ?? null
+      : null;
+
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box marginBottom={1}>
         <Text bold color="cyan">Easy Agent</Text>
         <Text dimColor> ({state.currentModel})</Text>
       </Box>
-      <Text dimColor>Type a message to start. Ctrl+C to interrupt, Ctrl+D to exit.</Text>
+      <Text dimColor>
+        Type a message to start. Ctrl+C to interrupt, Ctrl+D to exit.
+        {state.asyncAgents.some((a) => a.status === "running")
+          ? "  Shift+↑/↓ inspect teammates."
+          : ""}
+      </Text>
 
-      <ConversationView messages={state.messages} />
-      {state.taskMode === "task"
-        ? <TaskList tasks={state.tasks} />
-        : <TodoList todos={state.todos} />}
-      <ToolCallList toolCalls={state.toolCalls} />
+      {/*
+        Two display modes — controlled by the teammate view state machine:
+          - viewing → REPLACE the main conversation with the teammate
+            transcript viewer (mirrors source REPL.tsx's
+            viewingAgentTaskId branch). The picker / BackgroundAgentBar
+            still render at the bottom so the user knows the context.
+          - main or selecting → normal layout. In `selecting`, the
+            TeammatePicker overlay appears between StatusBar and
+            BackgroundAgentBar.
+      */}
+      {viewedAgent ? (
+        <TeammateViewer agent={viewedAgent} />
+      ) : (
+        <>
+          <ConversationView messages={state.messages} />
+          {state.taskMode === "task"
+            ? <TaskList tasks={state.tasks} />
+            : <TodoList todos={state.todos} />}
+          <ToolCallList toolCalls={state.toolCalls} />
+        </>
+      )}
       <SystemPanel notice={state.systemNotice} />
       <StatusBar
         isLoading={state.isLoading}
@@ -99,6 +145,12 @@ export function App({ model, permissionMode, shouldResume, resumeSessionId }: Ap
         permissionMode={state.permissionMode}
         onPlanDecision={actions.resolvePermission}
       />
+      {view.mode === "selecting" ? (
+        <TeammatePicker
+          agents={state.asyncAgents}
+          selectedAgentId={view.selectedAgentId}
+        />
+      ) : null}
       <BackgroundAgentBar agents={state.asyncAgents} />
       <InputPrompt isLoading={state.isLoading || Boolean(state.permissionPrompt)} inputValue={inputValue} />
       <CommandSuggestions items={commandSuggestions} />

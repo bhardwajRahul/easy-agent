@@ -35,6 +35,15 @@ export type SubAgentStatus = "running" | "completed" | "error" | "max_turns" | "
 export interface SubAgentProgress {
   /** AgentDefinition.agentType (e.g. "Explore", "general-purpose"). */
   agentType: string;
+  /**
+   * Stage 21 — teammate handle when this sub-agent was launched via
+   * `Agent({ name, team_name, ... })`. Set the UI prefers this to
+   * `agentType` because two teammates can share the same agentType
+   * (e.g. both backend + frontend are `general-purpose`), and showing
+   * "Agent[general-purpose]" twice loses the only information that
+   * distinguishes them. Undefined for plain sub-agents.
+   */
+  teammateName?: string;
   /** Human-friendly task description from the model's input. */
   description?: string;
   /** Number of tool_use blocks the sub-agent has emitted so far. */
@@ -78,10 +87,11 @@ export function getSubAgentProgress(toolUseId: string): SubAgentProgress | undef
  */
 export function startSubAgentProgress(
   toolUseId: string,
-  init: Pick<SubAgentProgress, "agentType" | "description">,
+  init: Pick<SubAgentProgress, "agentType" | "description" | "teammateName">,
 ): void {
   const snapshot: SubAgentProgress = {
     agentType: init.agentType,
+    ...(init.teammateName ? { teammateName: init.teammateName } : {}),
     ...(init.description ? { description: init.description } : {}),
     toolUseCount: 0,
     startTime: Date.now(),
