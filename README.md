@@ -22,9 +22,9 @@ Core goals:
 
 ## Project Status
 
-**Current stage:** Stage 22 — Hooks lifecycle system, next
+**Current stage:** Stage 24 — rendering experience upgrades, next
 
-The project has completed the tutorial-friendly implementation track through Stage 21, including the CLI, streaming communication, tool execution, terminal UI, session orchestration, context management, MCP, skills, sandboxing, sub-agents, background agent execution, git worktree isolation, and Agent Teams / multi-agent collaboration. Stage 22 is the next major planned area: lifecycle hooks.
+The project has completed the tutorial-friendly implementation track through Stage 23, including the CLI, streaming communication, tool execution, terminal UI, session orchestration, context management, MCP, skills, sandboxing, sub-agents, background agent execution, git worktree isolation, Agent Teams, lifecycle hooks, output styles, and user-defined slash commands. Stage 24 is the next major planned area: rendering experience upgrades.
 
 Easy Agent should currently be understood as a serious open-source rebuild in progress rather than a finished end-user product.
 
@@ -85,7 +85,7 @@ easy-agent/
 
 ## Roadmap and Progress
 
-The project follows a 31-phase roadmap designed to recreate the full Claude Code-style system progressively.
+The project follows a 32-phase roadmap designed to recreate the full Claude Code-style system progressively.
 
 | Phase | Area | Core Code | Status |
 |---|---|---|---:|
@@ -111,22 +111,23 @@ The project follows a 31-phase roadmap designed to recreate the full Claude Code
 | 19 | Sub-Agent and agent definitions | [`step/step19.js`](./step/step19.js) | ✅ Done |
 | 20 | Background agents and worktree isolation | [`step/step20.js`](./step/step20.js) | ✅ Done |
 | 21 | Agent Teams / multi-agent collaboration | [`step/step21.js`](./step/step21.js) | ✅ Done |
-| 22 | Hooks lifecycle system | `planned` | ⏳ Not started |
-| 23 | Terminal UI upgrades | `planned in step series` | 🚧 Partial |
-| 24 | Configuration system improvements | `planned in step series` | 🚧 Partial |
-| 25 | File history and rollback | `planned` | ⏳ Not started |
-| 26 | Error handling and resilience | `planned in step series` | 🚧 Partial |
-| 27 | Pipe mode / non-interactive execution | `planned` | ⏳ Not started |
-| 28 | Auto mode | `planned in step series` | 🚧 Partial |
-| 29 | Multi-provider support | `planned in step series` | ⏳ Not started |
-| 30 | Packaging, publishing, and documentation | `planned in step series` | 🚧 Partial |
+| 22 | Hooks lifecycle system | [`step/step22.js`](./step/step22.js) | ✅ Done |
+| 23 | Output styles and user commands | [`step/step23.js`](./step/step23.js) | ✅ Done |
+| 24 | Rendering experience upgrades | `planned` | ⏳ Not started |
+| 25 | Configuration system improvements | `planned in step series` | 🚧 Partial |
+| 26 | File history and rollback | `planned` | ⏳ Not started |
+| 27 | Error handling and resilience | `planned in step series` | 🚧 Partial |
+| 28 | Pipe mode / non-interactive execution | `planned` | ⏳ Not started |
+| 29 | Auto mode | `planned in step series` | 🚧 Partial |
+| 30 | Multi-provider support | `planned in step series` | ⏳ Not started |
+| 31 | Packaging, publishing, and documentation | `planned in step series` | 🚧 Partial |
 
 The [`easy-agent/step/`](./step/) directory contains tutorial-friendly milestone code, so each completed chapter is directly learnable and reproducible from a focused single file.
 
 Current implementation notes:
 
-- Stage 21 is complete in source and the step snapshot.
-- Stage 22 Hooks remains planned and intentionally separate from Agent Teams.
+- Stage 23 is complete in source and the step snapshot.
+- Stage 24 rendering experience upgrades is next; it is intentionally separate from the user-extension mechanisms added in Stages 22 and 23.
 
 ## What Easy Agent Is — and Is Not
 
@@ -191,9 +192,9 @@ agent --dump-system-prompt
 
 The next major milestones are:
 
-1. implement Stage 22 Hooks lifecycle system
-2. write the Stage 22 tutorial article and `step/step22.js`
-3. continue terminal UI and configuration improvements
+1. implement Stage 24 rendering experience upgrades
+2. write the Stage 24 tutorial article and `step/step24.js`
+3. continue configuration and file-history improvements
 4. move toward pipe mode, Auto Mode, and multi-provider architecture
 
 ## Contribution Policy
