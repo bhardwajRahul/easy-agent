@@ -9,6 +9,7 @@ import { getModelVisibleSkills } from "../services/skills/registry.js";
 import { formatAgentsSystemReminder } from "../agents/promptInjection.js";
 import { formatTeamSystemReminder } from "../agents/teamPromptInjection.js";
 import { getAllAgents } from "../agents/registry.js";
+import { getActiveOutputStyleConfig } from "../styles/registry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,17 +33,28 @@ export interface BuildSystemPromptOptions {
   userQuery?: string;
 }
 
-function getStaticPromptSections(): string[] {
-  return [
-    "You are Easy Agent, a terminal-native local coding assistant running inside the user's workspace.",
-    "Operate directly, be concise, and prefer taking concrete actions with tools when useful.",
-    "When solving coding tasks, first understand the relevant files, then make focused changes, then verify with the least expensive effective command.",
-    "Prefer specialized tools over shell when possible: use Read for reading files, Edit for precise changes, Write for full file creation or overwrite, Grep for content search, Glob for file discovery, and Bash only when shell execution is actually needed.",
-    "Treat the current working directory as the primary workspace boundary. The Easy Agent system directory at ~/.easy-agent is also available for memory and session storage; do not assume other outside paths are available.",
-    "When editing code, preserve existing behavior unless the user explicitly asks for a behavior change.",
-    "If a command or edit fails, explain the failure briefly and choose the next best action based on the observed result.",
-    "Keep answers structured and practical. Summarize what you changed or found, and avoid unnecessary narration.",
-  ];
+// Identity framing — always present, regardless of output style.
+const IDENTITY_SECTIONS = [
+  "You are Easy Agent, a terminal-native local coding assistant running inside the user's workspace.",
+  "Treat the current working directory as the primary workspace boundary. The Easy Agent system directory at ~/.easy-agent is also available for memory and session storage; do not assume other outside paths are available.",
+];
+
+// Coding instructions — dropped when an output style sets
+// keepCodingInstructions:false (the style then fully owns the agent's
+// behaviour). Built-in styles keep them; only opt-out custom styles strip.
+const CODING_INSTRUCTION_SECTIONS = [
+  "Operate directly, be concise, and prefer taking concrete actions with tools when useful.",
+  "When solving coding tasks, first understand the relevant files, then make focused changes, then verify with the least expensive effective command.",
+  "Prefer specialized tools over shell when possible: use Read for reading files, Edit for precise changes, Write for full file creation or overwrite, Grep for content search, Glob for file discovery, and Bash only when shell execution is actually needed.",
+  "When editing code, preserve existing behavior unless the user explicitly asks for a behavior change.",
+  "If a command or edit fails, explain the failure briefly and choose the next best action based on the observed result.",
+  "Keep answers structured and practical. Summarize what you changed or found, and avoid unnecessary narration.",
+];
+
+function getStaticPromptSections(keepCodingInstructions: boolean): string[] {
+  return keepCodingInstructions
+    ? [...IDENTITY_SECTIONS, ...CODING_INSTRUCTION_SECTIONS]
+    : [...IDENTITY_SECTIONS];
 }
 
 async function getGitContext(cwd: string): Promise<Pick<RuntimeEnvironmentContext, "gitBranch" | "gitStatus" | "gitRecentCommit">> {
@@ -104,9 +116,15 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions): Prom
     ignoreMemory ? Promise.resolve(null) : readMemoryEntrypoint(options.cwd),
   ]);
 
+  // Stage 23: output style reshapes HOW the agent answers. A non-null
+  // config means a non-default style is active; keepCodingInstructions
+  // decides whether the base coding guidance survives.
+  const activeStyle = getActiveOutputStyleConfig();
+  const keepCodingInstructions = !activeStyle || activeStyle.keepCodingInstructions !== false;
+
   const staticSections = [
     SYSTEM_PROMPT_STATIC_START,
-    ...getStaticPromptSections(),
+    ...getStaticPromptSections(keepCodingInstructions),
     SYSTEM_PROMPT_STATIC_END,
   ];
 
@@ -144,8 +162,17 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions): Prom
   // instructions during a single-agent conversation.
   const teamReminder = formatTeamSystemReminder();
 
+  // Stage 23: the active output-style prompt, injected as a labelled
+  // section. Placed in the dynamic block (not static) because the user can
+  // flip styles at runtime via /output-style and we want the change to take
+  // effect on the very next turn without a cache-stale prefix.
+  const outputStyleSection = activeStyle
+    ? `# Output Style: ${activeStyle.name}\n${activeStyle.prompt}`
+    : "";
+
   const dynamicSections = [
     SYSTEM_PROMPT_DYNAMIC_START,
+    outputStyleSection,
     formatEnvironmentContext(environmentContext),
     agentMdContext ? "Project memory (AGENT.md):\n" + agentMdContext : "",
     memorySections.length > 0 ? memorySections.join("\n\n") : "",

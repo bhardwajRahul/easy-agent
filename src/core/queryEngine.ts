@@ -39,6 +39,25 @@ import {
   pendingNotificationCount,
 } from "../state/notificationStore.js";
 import type { Skill } from "../types/types.js";
+import { findUserCommand } from "../commands/userCommands/registry.js";
+import { substituteArguments } from "../commands/userCommands/argumentSubstitution.js";
+import { isBuiltinCommandName } from "../commands/builtinCommandNames.js";
+import {
+  getActiveOutputStyleName,
+  getAllOutputStyles,
+  resolveOutputStyle,
+  setActiveOutputStyle,
+} from "../styles/registry.js";
+import { updateUserSettings } from "../utils/settings.js";
+import type { UserCommand } from "../commands/userCommands/types.js";
+import {
+  runSessionStartHooks,
+  runUserPromptSubmitHooks,
+  loadHooksDiagnosticReport,
+  HOOK_EVENTS,
+  type HookEvent,
+  type HooksSettings,
+} from "../hooks/index.js";
 
 export type QueryEngineEvent =
   | AgenticLoopEvent
@@ -82,6 +101,12 @@ export class QueryEngine {
   private totalUsage: Usage;
   private readonly defaultModel: string;
   private sessionModelOverride: string | null = null;
+  /**
+   * Stage 23: one-shot model override for a single turn, set when a user
+   * command's frontmatter declares `model:`. Cleared after the turn ends so
+   * the next prompt reverts to the session/default model.
+   */
+  private turnModelOverride: string | null = null;
   private readonly toolContext: ToolContext;
   private currentPermissionMode: PermissionMode;
   private prePlanMode: PermissionMode | null = null;
@@ -93,6 +118,14 @@ export class QueryEngine {
   private lastCallUsage: Usage = { input_tokens: 0, output_tokens: 0 };
   private modeChangeCallback?: (mode: PermissionMode, previousMode: PermissionMode) => void;
   private needsPlanModeExitAttachment = false;
+  /**
+   * Stage 22: tracks whether SessionStart hooks have already fired
+   * this process. The hook is a once-per-session boot signal — we
+   * deliberately do NOT re-fire on /clear, because source treats
+   * /clear as a different event type ("source: clear") that we don't
+   * teach in this stage.
+   */
+  private sessionStartHooksFired = false;
 
   constructor(options: QueryEngineOptions) {
     this.messages = [...(options.initialMessages ?? [])];
@@ -186,6 +219,25 @@ export class QueryEngine {
     }
 
     if (trimmed.startsWith("/")) {
+      // Stage 23: user-defined slash command (`/review [args]`). Resolved
+      // BEFORE skills so an explicit user command takes precedence, but we
+      // skip reserved built-in names so `/help`, `/output-style`, etc. can
+      // never be shadowed by a same-named file on disk. Expands into the
+      // same two-message pattern as skills (visible marker + hidden body).
+      const userExpansion = this.tryExpandUserCommand(trimmed);
+      if (userExpansion) {
+        if (userExpansion.model) {
+          this.turnModelOverride = userExpansion.model;
+        }
+        const markerMessage: MessageParam = {
+          role: "user",
+          content: userExpansion.markerContent,
+        };
+        this.messages = [...this.messages, markerMessage];
+        yield { type: "messages_updated", messages: [...this.messages] };
+        return yield* this.submitInternal(userExpansion.bodyText);
+      }
+
       // User-invoked skill: `/skill-name [args]`. Resolve the skill against
       // the registry; if it matches, expand into the source's two-message
       // pattern and submit normally. Falls through to handleCommand() for
@@ -287,6 +339,53 @@ export class QueryEngine {
   }
 
   /**
+   * Stage 23: expand `/command-name [args]` into the same two-message
+   * pattern as skills. The visible marker renders a "❯ /command args"
+   * bubble; the hidden body (prefixed `[command_invocation:<name>]`) carries
+   * the substituted prompt template to the model.
+   *
+   * Returns null when:
+   *   - the input doesn't look like a slash command, OR
+   *   - the name is a reserved built-in (so `/help` etc. reach handleCommand), OR
+   *   - no user command with that name is loaded.
+   */
+  private tryExpandUserCommand(
+    input: string,
+  ): { command: UserCommand; markerContent: string; bodyText: string; model?: string } | null {
+    // Command names may contain `:` (namespace) in addition to skill chars.
+    const match = input.match(/^\/([a-zA-Z0-9_:-]+)(?:\s+(.*))?$/);
+    if (!match) return null;
+    const [, name, rawArgs] = match;
+    if (isBuiltinCommandName(name)) return null;
+
+    const command = findUserCommand(name);
+    if (!command) return null;
+
+    const args = rawArgs?.trim() ?? "";
+
+    // Honour the command's allowed-tools whitelist by pre-authorizing those
+    // tools for this session (same as skills) — the user explicitly invoked
+    // the command, so we don't re-prompt for each internal tool call.
+    if (command.allowedTools.length > 0) {
+      this.addSessionAllowRules(command.allowedTools);
+    }
+
+    const body = substituteArguments(command.body, args);
+
+    const markerLines = [
+      `<command-message>${command.name}</command-message>`,
+      `<command-name>/${command.name}</command-name>`,
+    ];
+    if (args) {
+      markerLines.push(`<command-args>${args}</command-args>`);
+    }
+    const markerContent = markerLines.join("\n");
+
+    const bodyText = `[command_invocation:${command.name}]\n${body}`;
+    return { command, markerContent, bodyText, model: command.model };
+  }
+
+  /**
    * The original `submitMessage` body, factored out so user-invoked skills
    * can re-enter it with their expanded prompt text. Everything below this
    * point is identical to the pre-skills implementation.
@@ -295,9 +394,73 @@ export class QueryEngine {
     trimmed: string,
   ): AsyncGenerator<QueryEngineEvent, { handled: boolean; reason?: LoopTerminationReason }> {
 
+    // ─── Stage 22: SessionStart hook (one-shot per process) ─────────
+    // Source fires SessionStart from the bootstrap path; we delay
+    // until the user's first submit so the hook can't block CLI
+    // startup if it's slow / broken. The hook's additionalContext
+    // gets prepended to the conversation as a hidden "[session-start]"
+    // user message — the model sees it before the actual user prompt.
+    if (!this.sessionStartHooksFired) {
+      this.sessionStartHooksFired = true;
+      const startOutcome = await runSessionStartHooks({
+        source: this.messages.length === 0 ? "startup" : "resume",
+        cwd: this.toolContext.cwd,
+      });
+      const startCtx = startOutcome.additionalContext;
+      if (startCtx) {
+        const startMessage: MessageParam = {
+          role: "user",
+          content: `[session-start]\n${startCtx}`,
+        };
+        this.messages = [...this.messages, startMessage];
+        yield { type: "messages_updated", messages: [...this.messages] };
+      }
+      if (startOutcome.systemMessage) {
+        yield {
+          type: "command",
+          kind: "info",
+          message: `[SessionStart hook] ${startOutcome.systemMessage}`,
+        };
+      }
+    }
+
+    // ─── Stage 22: UserPromptSubmit hook ───────────────────────────
+    // Source fires UserPromptSubmit RIGHT BEFORE the prompt becomes
+    // a user message. The hook can:
+    //   - inject additionalContext (prepended to the user's prompt)
+    //   - block the prompt outright (decision: "block" / exit 2)
+    // We honor both. Skipping when `trimmed` is empty because empty
+    // calls are the background-notification drain path — there's no
+    // user prompt to feed the hook.
+    let promptToSubmit = trimmed;
+    if (trimmed.length > 0) {
+      const userOutcome = await runUserPromptSubmitHooks({
+        prompt: trimmed,
+        cwd: this.toolContext.cwd,
+      });
+      if (userOutcome.blockingError) {
+        yield {
+          type: "command",
+          kind: "error",
+          message: `[UserPromptSubmit hook blocked] ${userOutcome.blockingError}`,
+        };
+        return { handled: true };
+      }
+      if (userOutcome.additionalContext) {
+        promptToSubmit = `[user-context]\n${userOutcome.additionalContext}\n\n${trimmed}`;
+      }
+      if (userOutcome.systemMessage) {
+        yield {
+          type: "command",
+          kind: "info",
+          message: `[UserPromptSubmit hook] ${userOutcome.systemMessage}`,
+        };
+      }
+    }
+
     const previewSystemParts = await buildSystemPrompt({
       cwd: this.toolContext.cwd,
-      userQuery: trimmed,
+      userQuery: promptToSubmit,
     });
     const previewSystemPrompt = renderSystemPrompt(previewSystemParts);
 
@@ -388,8 +551,8 @@ export class QueryEngine {
     // message — the notification(s) we just drained ARE the user-side
     // input for the model. The Anthropic API also rejects empty
     // user-content blocks, so this guard is correctness, not just hygiene.
-    if (trimmed.length > 0) {
-      const userMessage: MessageParam = { role: "user", content: trimmed };
+    if (promptToSubmit.length > 0) {
+      const userMessage: MessageParam = { role: "user", content: promptToSubmit };
       this.messages = [...this.messages, userMessage];
       yield { type: "messages_updated", messages: [...this.messages] };
     }
@@ -467,6 +630,9 @@ export class QueryEngine {
       }
     } finally {
       this.abortController = null;
+      // Stage 23: drop any per-turn model override so the next prompt
+      // reverts to the session/default model.
+      this.turnModelOverride = null;
     }
   }
 
@@ -476,7 +642,7 @@ export class QueryEngine {
   }
 
   private getActiveModel(): string {
-    return this.sessionModelOverride ?? this.defaultModel;
+    return this.turnModelOverride ?? this.sessionModelOverride ?? this.defaultModel;
   }
 
   private getModelSource(): "default" | "session" {
@@ -491,15 +657,21 @@ export class QueryEngine {
         yield {
           type: "command",
           kind: "info",
-          message: "Commands: /help /clear /cost /model [name|default] /mode [default|plan|auto] /tasks [task|todo|reset] /mcp [tools <name>|reconnect <name>] /skills /agents /history /compact /<skill-name> [args] /exit /quit /bye",
+          message: "Commands: /help /clear /cost /model [name|default] /mode [default|plan|auto] /tasks [task|todo|reset] /mcp [tools <name>|reconnect <name>] /skills /agents /hooks /output-style [name] /history /compact /<skill-or-command> [args] /exit /quit /bye",
         };
         return { handled: true };
       case "mcp":
         return yield* this.handleMcpCommand(args);
+      case "output-style":
+      case "output_style":
+        return yield* this.handleOutputStyleCommand(args);
       case "skills":
         return yield* this.handleSkillsCommand();
       case "agents":
         return yield* this.handleAgentsCommand();
+      case "hooks":
+      case "hook":
+        return yield* this.handleHooksCommand();
       case "mode": {
         const nextMode = args[0]?.trim();
         if (!nextMode) {
@@ -677,6 +849,68 @@ export class QueryEngine {
   }
 
   /**
+   * Stage 23: `/output-style [name]`.
+   *   - no arg          → list available styles + show the active one
+   *   - <name>          → switch the active style and persist it as the
+   *                       default (`outputStyle` in ~/.easy-agent/settings.json)
+   * The switch takes effect on the NEXT turn because buildSystemPrompt reads
+   * the registry fresh each request.
+   */
+  private async *handleOutputStyleCommand(
+    args: string[],
+  ): AsyncGenerator<QueryEngineEvent, { handled: boolean }> {
+    const target = args.join(" ").trim();
+    const active = getActiveOutputStyleName();
+
+    if (!target) {
+      const all = getAllOutputStyles();
+      const lines = ["Output style status", `- Active: ${active}`, "", "Available styles:"];
+      for (const style of all) {
+        const marker = style.name === active ? "*" : " ";
+        lines.push(`  ${marker} ${style.name}    ${style.description} [${style.source}]`);
+      }
+      lines.push(
+        "",
+        "Usage: /output-style <name> to switch (e.g. /output-style Explanatory)",
+        "Usage: /output-style default to reset",
+      );
+      yield { type: "command", kind: "info", message: lines.join("\n") };
+      return { handled: true };
+    }
+
+    const resolved = resolveOutputStyle(target);
+    if (!resolved) {
+      const names = getAllOutputStyles().map((s) => s.name).join(", ");
+      yield {
+        type: "command",
+        kind: "error",
+        message: `Output style not found: ${target}. Available: ${names}.`,
+      };
+      return { handled: true };
+    }
+
+    if (resolved.name === active) {
+      yield {
+        type: "command",
+        kind: "info",
+        message: `Output style is already '${resolved.name}'.`,
+      };
+      return { handled: true };
+    }
+
+    setActiveOutputStyle(resolved.name);
+    // Persist as the default for future sessions. Best-effort: a write
+    // failure (e.g. read-only home) shouldn't break the in-session switch.
+    await updateUserSettings({ outputStyle: resolved.name }).catch(() => {});
+    yield {
+      type: "command",
+      kind: "info",
+      message: `Output style changed: ${active} → ${resolved.name}. Applies from the next turn.`,
+    };
+    return { handled: true };
+  }
+
+  /**
    * Handle `/skills` — read-only listing of every skill the loader picked
    * up at startup, split by visibility (model-visible vs hidden vs
    * conditionally-latent). No subcommands yet — `/skills reload` is
@@ -780,6 +1014,111 @@ export class QueryEngine {
       "you cannot invoke them directly. The model picks `subagent_type` from",
       "the names listed above, based on the task.",
     );
+    yield { type: "command", kind: "info", message: lines.join("\n") };
+    return { handled: true };
+  }
+
+  /**
+   * Handle `/hooks` — read-only listing of every configured hook the
+   * loader picked up at startup, grouped by event + source. Mirrors
+   * source's `commands/hooks/index.ts` + `HooksConfigMenu`, stripped
+   * to a text-only listing (no interactive TUI) — Easy Agent
+   * deliberately keeps the teaching version's slash UX dead simple.
+   *
+   * Shows:
+   *   - which file path was read for each scope (user / project)
+   *   - the kill switch state (EASY_AGENT_DISABLE_HOOKS)
+   *   - per-event matcher groups + the command + timeout
+   *
+   * The model never sees this output — it's a human-side answer to
+   * "what hooks are running right now?".
+   */
+  private async *handleHooksCommand(): AsyncGenerator<QueryEngineEvent, { handled: boolean }> {
+    const report = await loadHooksDiagnosticReport(this.toolContext.cwd);
+    const lines: string[] = [];
+
+    lines.push("Hooks configuration");
+    lines.push("");
+    if (report.globallyDisabled) {
+      lines.push("⚠ EASY_AGENT_DISABLE_HOOKS is set — all hooks are disabled this session.");
+      lines.push("");
+    }
+    lines.push(`User-scope file:    ${report.userPath}`);
+    lines.push(`Project-scope file: ${report.projectPath}`);
+    lines.push("");
+
+    const totalHookCount = (scope: HooksSettings): number =>
+      HOOK_EVENTS.reduce(
+        (sum, ev) =>
+          sum +
+          (scope[ev] ?? []).reduce((s, g) => s + g.hooks.length, 0),
+        0,
+      );
+    const userTotal = totalHookCount(report.userHooks);
+    const projectTotal = totalHookCount(report.projectHooks);
+
+    if (userTotal === 0 && projectTotal === 0) {
+      lines.push("No hooks configured. To add one, edit the user or project file above:");
+      lines.push("");
+      lines.push("  {");
+      lines.push('    "hooks": {');
+      lines.push('      "PreToolUse": [');
+      lines.push('        { "matcher": "Bash", "hooks": [');
+      lines.push('          { "type": "command", "command": "./safety-check.sh", "timeout": 10 }');
+      lines.push("        ] }");
+      lines.push("      ]");
+      lines.push("    }");
+      lines.push("  }");
+      lines.push("");
+      lines.push("Six events are supported: " + HOOK_EVENTS.join(", "));
+      lines.push("");
+      lines.push("Hook contract:");
+      lines.push("  - stdin = JSON event payload");
+      lines.push("  - exit 0 + stdout text   → injected as additionalContext (for some events)");
+      lines.push("  - exit 2 + stderr text   → block the action; stderr fed back to the model");
+      lines.push("  - JSON stdout            → richer control (decision / permissionDecision / additionalContext)");
+      yield { type: "command", kind: "info", message: lines.join("\n") };
+      return { handled: true };
+    }
+
+    lines.push(`Loaded ${userTotal + projectTotal} hook command(s) — ${userTotal} user, ${projectTotal} project.`);
+    lines.push("");
+
+    const renderScope = (scopeLabel: string, scope: HooksSettings): void => {
+      let anyForScope = false;
+      for (const event of HOOK_EVENTS) {
+        const groups = scope[event] ?? [];
+        if (groups.length === 0) continue;
+        if (!anyForScope) {
+          lines.push(`[${scopeLabel}]`);
+          anyForScope = true;
+        }
+        for (const group of groups) {
+          const matcher = group.matcher && group.matcher !== "*" ? group.matcher : "*";
+          lines.push(`  ${event}  matcher=${matcher}`);
+          for (const hook of group.hooks) {
+            const cmdPreview = hook.command.length > 80
+              ? `${hook.command.slice(0, 77)}...`
+              : hook.command;
+            lines.push(`    - $ ${cmdPreview}    (timeout: ${hook.timeout ?? 60}s)`);
+          }
+        }
+      }
+      if (anyForScope) lines.push("");
+    };
+
+    renderScope("user", report.userHooks);
+    renderScope("project", report.projectHooks);
+
+    lines.push("Order of execution: all user groups, then all project groups (in file order).");
+    lines.push("Run results aggregate as: deny > ask > allow.");
+    lines.push("Set EASY_AGENT_DISABLE_HOOKS=1 to disable every hook for one session.");
+
+    // Re-cast HookEvent to satisfy the unused-import check after type
+    // narrowing eliminates the value usage at runtime. (Compile-only;
+    // no runtime cost.)
+    void ({} as HookEvent);
+
     yield { type: "command", kind: "info", message: lines.join("\n") };
     return { handled: true };
   }

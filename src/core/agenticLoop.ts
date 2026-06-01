@@ -21,7 +21,13 @@ import {
 } from "../services/skills/conditional.js";
 import { tokenCountWithEstimation } from "../utils/tokens.js";
 import { isAtBlockingLimit, calculateTokenWarningState, type TokenWarningResult } from "../context/autoCompact.js";
-import type { ContentBlock, ToolUseBlock, Usage } from "../types/message.js";
+import type { ContentBlock, TextBlock, ToolUseBlock, Usage } from "../types/message.js";
+import {
+  runPreToolUseHooks,
+  runPostToolUseHooks,
+  runStopHooks,
+  runSubagentStopHooks,
+} from "../hooks/index.js";
 
 export const MAX_TOOL_TURNS = 50;
 
@@ -117,6 +123,16 @@ export interface QueryParams {
    * future "non-interactive" execution context.
    */
   shouldAvoidPermissionPrompts?: boolean;
+  /**
+   * Stage 22: when set, the loop fires SubagentStop hooks (with the
+   * supplied id + type) instead of Stop hooks at the end of the
+   * conversation. Mirrors source's
+   *   `const hookEvent = subagentId ? 'SubagentStop' : 'Stop'`
+   * in utils/hooks.ts:executeStopHooks. The top-level main agent
+   * leaves this undefined; runChildAgent + runAsyncAgent pass their
+   * own id + type so SubagentStop hooks fire per-agent.
+   */
+  subagentInfo?: { agentId: string; agentType: string };
 }
 
 export interface RunToolsOptions {
@@ -135,6 +151,21 @@ export interface RunToolsOptions {
  * low enough that the OS doesn't choke on subprocess explosions.
  */
 const MAX_TOOL_USE_CONCURRENCY = 10;
+
+/**
+ * Extract the joined plain-text from an assistant message's content
+ * blocks. Used as the `last_assistant_message` payload for Stop /
+ * SubagentStop hooks. Returns `undefined` when there's no text at
+ * all (e.g. a turn whose entire output is tool_use blocks).
+ */
+function extractLastAssistantText(content: ContentBlock[]): string | undefined {
+  const text = content
+    .filter((block): block is TextBlock => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+  return text.length > 0 ? text : undefined;
+}
 
 /**
  * Build the denial message used when a backgrounded sub-agent (or any
@@ -235,8 +266,37 @@ async function runOneToolBlock(
   }
 
   try {
+    // ─── Stage 22: PreToolUse hooks ────────────────────────────────
+    // Fire user-defined PreToolUse hooks BEFORE the permission check.
+    // A hook can:
+    //   - veto the tool call (blockingError → result becomes an error)
+    //   - override the permission decision (allow / ask / deny)
+    //   - inject additionalContext that we prepend to the tool_result
+    //
+    // Mirrors source's order in
+    //   claude-code-source-code/src/services/tools/toolHooks.ts:runPreToolUseHooks
+    // which is called from `runToolWithPermissions` BEFORE `checkPermission`.
+    const preOutcome = await runPreToolUseHooks({
+      toolName: block.name,
+      toolInput,
+      toolUseId: block.id,
+      cwd: context.cwd,
+      signal: context.abortSignal,
+    });
+
+    if (preOutcome.blockingError) {
+      const reason = preOutcome.blockingError;
+      const result: ToolResult = {
+        content: `Blocked by PreToolUse hook: ${reason}`,
+        isError: true,
+      };
+      return {
+        execution: { toolUseId: block.id, toolName: block.name, toolInput, result },
+      };
+    }
+
     const liveMode = context.getPermissionMode?.() as PermissionMode | undefined;
-    const permission = await checkPermission({
+    let permission = await checkPermission({
       tool,
       input: toolInput,
       cwd: context.cwd,
@@ -244,6 +304,24 @@ async function runOneToolBlock(
       settings: options.permissionSettings,
       sessionRules: options.sessionPermissionRules,
     });
+
+    // PreToolUse hook can override the rule-based decision (source's
+    // `permissionBehavior` from `processHookJSONOutput`). `deny` we
+    // handle above as `blockingError`; `allow` short-circuits the
+    // permission flow; `ask` upgrades a would-be `allow` into a prompt.
+    if (preOutcome.permissionBehavior === "allow") {
+      permission = {
+        ...permission,
+        behavior: "allow",
+        reason: preOutcome.permissionDecisionReason || "Allowed by PreToolUse hook",
+      };
+    } else if (preOutcome.permissionBehavior === "ask" && permission.behavior !== "deny") {
+      permission = {
+        ...permission,
+        behavior: "ask",
+        reason: preOutcome.permissionDecisionReason || "PreToolUse hook requested approval",
+      };
+    }
 
     if (permission.behavior === "deny") {
       const result: ToolResult = {
@@ -310,16 +388,56 @@ async function runOneToolBlock(
     // the right tool-call card in the UI.
     const callContext: ToolContext = { ...context, toolUseId: block.id };
     const rawResult = await tool.call(toolInput, callContext);
-    const result: ToolResult = {
+    let result: ToolResult = {
       ...rawResult,
       content: truncateToolResult(rawResult.content, tool.maxResultSizeChars),
     };
+
+    // ─── Stage 22: PostToolUse hooks ─────────────────────────────────
+    // Fire AFTER the tool executes. Two effects:
+    //   - additionalContext  → appended to the tool_result the model sees
+    //   - blockingError      → wraps the result with an error attachment
+    //
+    // We pass the raw (untruncated) response so hooks can introspect it;
+    // the truncation applied above is purely for the model's prompt size.
+    const postOutcome = await runPostToolUseHooks({
+      toolName: block.name,
+      toolInput,
+      toolResponse: rawResult,
+      toolUseId: block.id,
+      cwd: context.cwd,
+      signal: context.abortSignal,
+    });
+    if (postOutcome.additionalContext) {
+      const sep = "\n\n[PostToolUse hook]\n";
+      result = {
+        ...result,
+        content: result.content + sep + postOutcome.additionalContext,
+      };
+    }
+    if (postOutcome.blockingError) {
+      result = {
+        ...result,
+        content:
+          (result.isError ? result.content + "\n\n" : "") +
+          `[PostToolUse hook blocked]\n${postOutcome.blockingError}`,
+        isError: true,
+      };
+    }
 
     if (!result.isError) {
       const filePaths = extractToolFilePaths(block.name, toolInput);
       if (filePaths.length > 0) {
         activateConditionalSkillsForPaths(filePaths, context.cwd);
       }
+    }
+
+    if (preOutcome.additionalContext) {
+      const sep = "\n\n[PreToolUse hook]\n";
+      result = {
+        ...result,
+        content: preOutcome.additionalContext + sep + result.content,
+      };
     }
 
     return {
@@ -447,6 +565,9 @@ export async function* query(
     output_tokens: 0,
   };
 
+  // Stop-hook re-entry guard — see the call site below for context.
+  let stopHookFired = false;
+
   while (state.turnCount < maxTurns) {
     if (params.abortSignal?.aborted) {
       const abortedState = { ...state, aborted: true };
@@ -561,6 +682,52 @@ export async function* query(
     };
 
     if (stopReason !== "tool_use") {
+      // ─── Stage 22: Stop hook ──────────────────────────────────────
+      // Fire user-defined Stop hooks before the loop returns. A hook
+      // can inject extra context that becomes a user message and
+      // continues the loop ("not done yet — keep going"), or it can
+      // just observe the final assistant message and emit telemetry.
+      //
+      // `stopHookFired` is the local equivalent of source's
+      // `stop_hook_active` flag — once a Stop hook has caused us to
+      // re-enter the loop, we skip the hook on the second pass so
+      // misbehaving hooks can't trigger an infinite re-prompt cycle.
+      //
+      // Mirror: claude-code-source-code/src/utils/hooks.ts:executeStopHooks
+      if (!stopHookFired) {
+        const lastAssistantText = extractLastAssistantText(assistantContent);
+        const stopOutcome = params.subagentInfo
+          ? await runSubagentStopHooks({
+              agentId: params.subagentInfo.agentId,
+              agentType: params.subagentInfo.agentType,
+              lastAssistantMessage: lastAssistantText,
+              cwd: params.toolContext.cwd,
+              signal: params.abortSignal,
+            })
+          : await runStopHooks({
+              lastAssistantMessage: lastAssistantText,
+              cwd: params.toolContext.cwd,
+              signal: params.abortSignal,
+            });
+
+        const continuationText =
+          stopOutcome.blockingError || stopOutcome.additionalContext;
+        if (continuationText) {
+          stopHookFired = true;
+          const continuationMessage: MessageParam = {
+            role: "user",
+            content: `[stop-hook]\n${continuationText}`,
+          };
+          state = {
+            messages: [...state.messages, continuationMessage],
+            turnCount: state.turnCount,
+            aborted: false,
+          };
+          yield { type: "tool_result_message", message: continuationMessage };
+          continue;
+        }
+      }
+
       yield { type: "turn_complete", reason: "completed", turnCount: state.turnCount };
       return { state, usage: totalUsage, lastCallUsage, reason: "completed" };
     }

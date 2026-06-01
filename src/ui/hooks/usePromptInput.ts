@@ -50,6 +50,8 @@ const BUILTIN_COMMANDS: CommandSuggestion[] = [
   { name: "/mcp", description: "Inspect / reconnect MCP servers" },
   { name: "/skills", description: "List loaded skills (user + project scope)" },
   { name: "/agents", description: "List built-in + custom sub-agent definitions" },
+  { name: "/hooks", description: "Show configured lifecycle hooks (user + project scope)" },
+  { name: "/output-style", description: "Inspect or switch the answer style (default/Explanatory/Learning)" },
   { name: "/history", description: "Show saved sessions for this project" },
   { name: "/compact", description: "Compact the conversation context" },
   { name: "/exit", description: "Exit the session" },
@@ -65,6 +67,12 @@ const TASK_MODE_OPTIONS: { mode: TaskMode; description: string }[] = [
   { mode: "task", description: "Persistent task graph (Task V2) — default" },
   { mode: "todo", description: "Session-memory todo list (TodoWrite V1)" },
 ];
+
+// Max suggestions shown at once. Must comfortably exceed the built-in count
+// (currently ~14) so a bare `/` still surfaces user-defined commands +
+// skills, not just the first screenful of built-ins. Anything past this is
+// summarized as "+N more" so a large skill set can't flood the terminal.
+const MAX_SUGGESTIONS = 20;
 
 export function usePromptInput({
   isLoading,
@@ -253,7 +261,7 @@ export function usePromptInput({
       seen.add(cmd.name);
       merged.push(cmd);
     }
-    return merged.filter((item) => item.name.startsWith(keyword)).slice(0, 8);
+    return merged.filter((item) => item.name.startsWith(keyword)).slice(0, MAX_SUGGESTIONS);
   }, [inputValue, extraCommands]);
 
   const showCommandSuggestions = filteredCommands.length > 0 && !showModeSelector && !showTaskModeSelector;

@@ -230,6 +230,14 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     initialMessages.push({ role: "user", content: params.prompt });
   }
 
+  // Stage 22: id we'll use for SubagentStop hooks. Sync sub-agents
+  // don't have a persistent agent id (only async/background ones do),
+  // so we mint a per-invocation one here. Hook authors can match on
+  // `agent_type` for type-level rules.
+  const agentIdForHooks = params.teammateIdentity?.agentName
+    ? `teammate:${params.teammateIdentity.teamName}:${params.teammateIdentity.agentName}`
+    : `${def.agentType}:${Date.now()}`;
+
   const loop = query({
     messages: initialMessages,
     systemPrompt: def.getSystemPrompt(),
@@ -243,6 +251,7 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     sessionPermissionRules: params.sessionPermissionRules,
     onPermissionRequest: params.onPermissionRequest,
     shouldAvoidPermissionPrompts: params.shouldAvoidPermissionPrompts,
+    subagentInfo: { agentId: agentIdForHooks, agentType: def.agentType },
   });
 
   let finalMessages: MessageParam[] = [];

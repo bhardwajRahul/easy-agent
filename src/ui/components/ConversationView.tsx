@@ -25,6 +25,10 @@ function isInternalMessage(message: MessageParam): boolean {
   // prompt, but the user already sees the bubble + the assistant's
   // streaming reply, so the raw SKILL.md dump would just be noise here.
   if (content.startsWith("[skill_invocation:")) return true;
+  // Stage 23: user-command invocations follow the same two-message pattern
+  // as skills — a visible `<command-name>` bubble plus this hidden body that
+  // carries the substituted prompt template to the model.
+  if (content.startsWith("[command_invocation:")) return true;
   return false;
 }
 

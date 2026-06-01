@@ -28,6 +28,8 @@
  */
 
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { getProjectSettingsPath, getUserSettingsPath } from "./paths.js";
 
 export interface SettingsFileResult<T = unknown> {
   /** Parsed JSON object, or null if missing / unreadable / invalid. */
@@ -73,4 +75,48 @@ export async function readJsonSettingsFile<T = unknown>(
       parseError: `Failed to parse ${filePath}: ${(error as Error).message}`,
     };
   }
+}
+
+/**
+ * Read-merge-write a shallow patch into the USER settings file
+ * (`~/.easy-agent/settings.json`). Used by `/output-style` (and future
+ * `/config`) to persist a top-level preference like `outputStyle`.
+ *
+ * Semantics:
+ *   - Missing / unparseable file → starts from `{}` (we don't want a single
+ *     malformed character to make a preference un-persistable; the original
+ *     bad content is overwritten with the merged result).
+ *   - Shallow merge only — nested objects are replaced, not deep-merged.
+ *     That's all the current callers need.
+ *   - Creates `~/.easy-agent/` if it doesn't exist yet.
+ */
+export async function updateUserSettings(
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const filePath = getUserSettingsPath();
+  const { raw } = await readJsonSettingsFile<Record<string, unknown>>(filePath);
+  const merged = { ...(raw ?? {}), ...patch };
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(merged, null, 2) + "\n", "utf-8");
+}
+
+/**
+ * Read a single top-level string setting, merging user + project scopes
+ * with PROJECT winning (project overrides user — same precedence as the
+ * MCP / permissions loaders). Returns undefined when the key is absent or
+ * not a string in both scopes.
+ */
+export async function readMergedStringSetting(
+  cwd: string,
+  key: string,
+): Promise<string | undefined> {
+  const [user, project] = await Promise.all([
+    readJsonSettingsFile<Record<string, unknown>>(getUserSettingsPath()),
+    readJsonSettingsFile<Record<string, unknown>>(getProjectSettingsPath(cwd)),
+  ]);
+  const projectVal = project.raw?.[key];
+  if (typeof projectVal === "string" && projectVal.trim()) return projectVal.trim();
+  const userVal = user.raw?.[key];
+  if (typeof userVal === "string" && userVal.trim()) return userVal.trim();
+  return undefined;
 }

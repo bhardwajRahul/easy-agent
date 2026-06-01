@@ -53,8 +53,16 @@ Commands (in REPL):
   /mcp [tools|reconnect <n>]  Inspect or reconnect MCP servers
   /skills                     List loaded skills (user + project scope)
   /<skill-name> [args]        Invoke a skill by name
+  /<command> [args]           Invoke a user-defined command (.easy-agent/commands)
+  /output-style [name]        Inspect or switch the answer style
   /agents                     List built-in + custom sub-agent definitions
+  /hooks                      Show configured lifecycle hooks
   /history                    Show session history
+
+Extensions (stage 23 — Markdown + frontmatter):
+  Output styles: ~/.easy-agent/output-styles/<name>.md (default/Explanatory/Learning built-in)
+  Commands:      ~/.easy-agent/commands/<name>.md → /<name>; team/review.md → /team:review
+                 Body supports $ARGUMENTS / $1 / $2; frontmatter: description, argument-hint, model, allowed-tools
 
 Sub-agents (stage 19):
   Built-in: general-purpose, Explore
@@ -67,6 +75,22 @@ Agent Teams (stage 21 — requires --agent-teams or EASY_AGENT_TEAMS=1):
   SendMessage({ to, message, summary })      Drop a message in a teammate's inbox
   TeamDelete()                               Disband the active team
   Disabled by default; the model never sees the team tools when off.
+
+Hooks (stage 22 — user-defined shell scripts on lifecycle events):
+  Configure in ~/.easy-agent/settings.json or <cwd>/.easy-agent/settings.json:
+    {
+      "hooks": {
+        "PreToolUse":       [{ "matcher": "Bash", "hooks": [{ "command": "..." }] }],
+        "PostToolUse":      [{ "matcher": "*",    "hooks": [{ "command": "..." }] }],
+        "UserPromptSubmit": [{ "hooks": [{ "command": "..." }] }],
+        "SessionStart":     [{ "matcher": "startup", "hooks": [{ "command": "..." }] }],
+        "Stop":             [{ "hooks": [{ "command": "..." }] }],
+        "SubagentStop":     [{ "matcher": "general-purpose", "hooks": [{ "command": "..." }] }]
+      }
+    }
+  Hook receives the event JSON on stdin; exit 2 + stderr blocks the action.
+  Set EASY_AGENT_DISABLE_HOOKS=1 to disable all hooks globally.
+
   /compact                    Compact conversation context
   /exit, /quit, /bye          Exit the REPL
 `);
@@ -100,6 +124,21 @@ Agent Teams (stage 21 — requires --agent-teams or EASY_AGENT_TEAMS=1):
   const { bootstrapAgents } = await import("../agents/bootstrap.js");
   await bootstrapAgents(process.cwd()).catch((error) => {
     console.error(`[easy-agent] agents bootstrap failed: ${(error as Error).message}`);
+  });
+
+  // Output styles (stage 23) — must load before any system-prompt render
+  // (live REPL or --dump-system-prompt) so the persisted `outputStyle`
+  // preference and any custom styles are reflected in the prompt.
+  const { bootstrapOutputStyles } = await import("../styles/bootstrap.js");
+  await bootstrapOutputStyles(process.cwd()).catch((error) => {
+    console.error(`[easy-agent] output-styles bootstrap failed: ${(error as Error).message}`);
+  });
+
+  // User-defined slash commands (stage 23) — loaded before the UI so the
+  // suggestion list + dispatch see them on frame 1.
+  const { bootstrapUserCommands } = await import("../commands/userCommands/bootstrap.js");
+  await bootstrapUserCommands(process.cwd()).catch((error) => {
+    console.error(`[easy-agent] commands bootstrap failed: ${(error as Error).message}`);
   });
 
   // Stage 21 — Agent Teams startup notice. Mirrors source's

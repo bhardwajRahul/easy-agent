@@ -18,6 +18,7 @@ import { useAgentSession } from "./hooks/useAgentSession.js";
 import { useTeammateNavigation } from "./hooks/useTeammateNavigation.js";
 import { useTeammateView } from "./hooks/useTeammateViewState.js";
 import { getAllUserInvocableSkills } from "../services/skills/registry.js";
+import { getAllUserCommands } from "../commands/userCommands/registry.js";
 import type { CommandSuggestion } from "./types.js";
 
 interface AppProps {
@@ -67,13 +68,32 @@ export function App({ model, permissionMode, shouldResume, resumeSessionId }: Ap
     [state.messages.length, state.toolCalls.length],
   );
 
+  // Stage 23: user-defined `/<name>` commands. Loaded once at startup so
+  // a stable dependency array is fine here.
+  const userCommands: CommandSuggestion[] = React.useMemo(
+    () =>
+      getAllUserCommands().map((cmd) => ({
+        name: `/${cmd.name}`,
+        description:
+          cmd.description.length > 80
+            ? `${cmd.description.slice(0, 77)}…`
+            : cmd.description,
+      })),
+    [],
+  );
+
+  const extraCommands = React.useMemo(
+    () => [...skillCommands, ...userCommands],
+    [skillCommands, userCommands],
+  );
+
   const { inputValue, commandSuggestions, modeSuggestions, taskModeSuggestions } = usePromptInput({
     isLoading: state.isLoading,
     hasPermissionPrompt: Boolean(state.permissionPrompt) && !isPlanExitActive,
     isPlanExitPrompt: false,
     permissionMode: state.permissionMode,
     taskMode: state.taskMode,
-    extraCommands: skillCommands,
+    extraCommands,
     onSubmit: actions.submit,
     onExit: exit,
     onInterrupt: actions.interrupt,

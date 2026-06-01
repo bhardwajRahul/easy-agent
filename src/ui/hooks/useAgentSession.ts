@@ -44,6 +44,8 @@ import {
   subscribePendingNotifications,
 } from "../../state/notificationStore.js";
 import { findSkill } from "../../services/skills/registry.js";
+import { findUserCommand } from "../../commands/userCommands/registry.js";
+import { isBuiltinCommandName } from "../../commands/builtinCommandNames.js";
 import { removeSandboxViolationTags } from "../../sandbox/index.js";
 import {
   getTaskMode,
@@ -105,6 +107,8 @@ function buildCommandNotice(message: string, kind: "info" | "error"): SystemNoti
         "/mcp  Inspect MCP servers and their tools",
         "/skills  List loaded skills (user + project scope)",
         "/<skill-name> [args]  Run a registered skill as a chat turn",
+        "/<command> [args]  Run a user-defined command (~/.easy-agent/commands)",
+        "/output-style [name]  Inspect or switch the answer style",
         "/agents  List built-in + custom sub-agent definitions",
         "/history  Show saved sessions for this project",
         "/compact  Compact conversation context",
@@ -161,6 +165,18 @@ function buildCommandNotice(message: string, kind: "info" | "error"): SystemNoti
     return {
       tone: kind,
       title: "Agents",
+      body: message,
+    };
+  }
+
+  if (
+    message.startsWith("Output style") ||
+    message.startsWith("Output style is already") ||
+    message.startsWith("Output style not found")
+  ) {
+    return {
+      tone: kind,
+      title: "Output style",
       body: message,
     };
   }
@@ -645,12 +661,21 @@ export function useAgentSession({
     // invocations feel broken even though events were flowing through
     // the engine. Detect skill commands by peeking at the registry here
     // and treat them as LLM-triggering input below.
-    const skillCommandName = isSlashCommand
-      ? trimmed.slice(1).split(/\s+/, 1)[0]?.toLowerCase() ?? ""
+    const rawCommandName = isSlashCommand
+      ? trimmed.slice(1).split(/\s+/, 1)[0] ?? ""
       : "";
+    const skillCommandName = rawCommandName.toLowerCase();
     const isSkillCommand =
       isSlashCommand && !!skillCommandName && !!findSkill(skillCommandName);
-    const isLlmTriggering = !isSlashCommand || isSkillCommand;
+    // Stage 23: user-defined commands also engage the full agentic loop
+    // (they expand into a real prompt). Skip reserved built-in names so
+    // `/help` etc. stay synchronous notices, mirroring the engine's guard.
+    const isUserCommand =
+      isSlashCommand &&
+      !!rawCommandName &&
+      !isBuiltinCommandName(rawCommandName) &&
+      !!findUserCommand(rawCommandName);
+    const isLlmTriggering = !isSlashCommand || isSkillCommand || isUserCommand;
 
     cancelPendingText();
     setStreamingText("");
