@@ -7,8 +7,152 @@
  * identical once an in-flight card transitions into history.
  */
 
+import path from "node:path";
+import { diffStats } from "./diffFormat.js";
+
 const MAX_ERROR_LINES = 12;
 const MAX_ERROR_CHARS = 2000;
+
+/**
+ * A one-line tool-card descriptor, shared by the live and history cards so
+ * they stay visually identical. `label` is the tool name, `target` the
+ * file/pattern, and either `stat` (free text, e.g. "240 lines") OR
+ * `added`/`removed` (colored `+N -N`) is shown as a trailing dim hint.
+ */
+export interface ToolLine {
+  label: string;
+  target?: string;
+  stat?: string;
+  added?: number;
+  removed?: number;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Collapse an absolute path inside the cwd to a workspace-relative one. */
+export function displayPath(p: string | undefined): string {
+  if (!p) return "";
+  const cwd = process.cwd();
+  if (p === cwd) return ".";
+  if (p.startsWith(cwd + path.sep)) return p.slice(cwd.length + 1);
+  return p;
+}
+
+/** Read result → "N lines" (the body is `header\n<numbered lines>`). */
+function readStat(result: string): string | undefined {
+  const total = result.split("\n").length;
+  const body = Math.max(0, total - 1); // drop the "path (… lines)" header
+  return body > 0 ? `${body} line${body === 1 ? "" : "s"}` : undefined;
+}
+
+/** Grep result → "N matches in M files" (rg emits `path:line:text`). */
+function grepStat(result: string): string | undefined {
+  if (result.startsWith("No matches")) return "0 matches";
+  const lines = result.split("\n").filter((l) => l.length > 0);
+  if (lines.length === 0) return undefined;
+  const files = new Set(lines.map((l) => l.slice(0, l.indexOf(":"))).filter(Boolean));
+  const m = lines.length;
+  const f = files.size;
+  return `${m} match${m === 1 ? "" : "es"}${f > 0 ? ` in ${f} file${f === 1 ? "" : "s"}` : ""}`;
+}
+
+/** Glob result → "N files" (body is `Matched files under …:\n<paths>`). */
+function globStat(result: string): string | undefined {
+  if (result.startsWith("No files")) return "0 files";
+  const n = Math.max(0, result.split("\n").length - 1);
+  return n > 0 ? `${n} file${n === 1 ? "" : "s"}` : undefined;
+}
+
+/** Collapse whitespace and truncate a shell command for the header line. */
+function shortenCommand(cmd: string, max = 72): string {
+  const oneLine = cmd.replace(/\s+/g, " ").trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
+
+/**
+ * Pull the human-relevant stdout/stderr out of a Bash tool_result, dropping
+ * the `Command:/Read-only:/Sandbox:/Exit code:` metadata header and the
+ * STDOUT:/STDERR: section labels, and stripping the model-only
+ * <sandbox_violations> tag. Returns the trimmed body (may be empty).
+ */
+export function extractBashOutput(content: string): string {
+  const withoutTag = content.replace(/<sandbox_violations>[\s\S]*?<\/sandbox_violations>/g, "").trim();
+  const lines = withoutTag.split("\n");
+  const body: string[] = [];
+  let capturing = false;
+  for (const line of lines) {
+    if (line === "STDOUT:" || line === "STDERR:") {
+      capturing = true;
+      continue;
+    }
+    if (/^(Command|Read-only|Sandbox|Exit code): /.test(line)) continue;
+    if (capturing) body.push(line);
+  }
+  return body.join("\n").trim();
+}
+
+/** Parse the `Exit code: N` line from a Bash result, if present. */
+function bashExitCode(result: string): number | undefined {
+  const m = result.match(/^Exit code: (-?\d+)$/m);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Build the one-line descriptor for a tool card. `result` is optional: the
+ * live (in-flight) card only knows the input, so Read/Grep counts that need
+ * the result body are simply omitted there and fill in once the card lands in
+ * history. Edit's `+N -N` is derived from the input alone, so it shows live.
+ */
+export function summarizeTool(
+  name: string,
+  input: Record<string, unknown> | undefined,
+  result?: string,
+): ToolLine {
+  const inp = input ?? {};
+  switch (name) {
+    case "Edit": {
+      const target = displayPath(asString(inp.file_path));
+      const oldStr = asString(inp.old_string);
+      const newStr = asString(inp.new_string);
+      if (oldStr !== undefined && newStr !== undefined) {
+        const { added, removed } = diffStats(oldStr, newStr);
+        return { label: "Edit", target, added, removed };
+      }
+      return { label: "Edit", target };
+    }
+    case "Write": {
+      const target = displayPath(asString(inp.file_path));
+      const content = asString(inp.content) ?? "";
+      const n = content ? content.split("\n").length : 0;
+      const verb = result?.startsWith("Created")
+        ? "created"
+        : result?.startsWith("Updated")
+          ? "updated"
+          : undefined;
+      const stat = `${verb ? `${verb}, ` : ""}${n} line${n === 1 ? "" : "s"}`;
+      return { label: "Write", target, stat };
+    }
+    case "Read":
+      return { label: "Read", target: displayPath(asString(inp.file_path)), stat: result ? readStat(result) : undefined };
+    case "Grep": {
+      const pat = asString(inp.pattern);
+      return { label: "Grep", target: pat ? `"${pat}"` : undefined, stat: result ? grepStat(result) : undefined };
+    }
+    case "Glob":
+      return { label: "Glob", target: asString(inp.pattern), stat: result ? globStat(result) : undefined };
+    case "Bash": {
+      const cmd = asString(inp.command);
+      const target = cmd ? shortenCommand(cmd) : undefined;
+      const code = result ? bashExitCode(result) : undefined;
+      const stat = code !== undefined && code !== 0 ? `exit ${code}` : undefined;
+      return { label: "Bash", target, stat };
+    }
+    default:
+      return { label: name };
+  }
+}
 
 /**
  * Clamp a (potentially long) error message to a bounded number of lines

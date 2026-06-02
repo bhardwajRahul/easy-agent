@@ -1,5 +1,6 @@
 import type { PermissionMode } from "../permissions/permissions.js";
 import type { SubAgentProgress } from "../state/subAgentProgressStore.js";
+import type { BashProgress } from "../state/bashProgressStore.js";
 
 export interface ToolCallInfo {
   /**
@@ -17,6 +18,12 @@ export interface ToolCallInfo {
   isError?: boolean;
   /** Short one-line summary of tool input (shown for debugging). */
   inputPreview?: string;
+  /**
+   * Raw tool input args, captured at tool_use_done. Lets the live card show
+   * the same descriptor as the historical card (e.g. Edit's `+N -N`, derived
+   * from old_string/new_string) without re-querying anything.
+   */
+  input?: Record<string, unknown>;
   /** Full error content from the tool (shown when isError). */
   errorMessage?: string;
   /**
@@ -30,6 +37,12 @@ export interface ToolCallInfo {
    * so re-renders can be driven by setState in one place.
    */
   subAgentProgress?: SubAgentProgress;
+  /**
+   * For Bash tool calls: live stdout/stderr tail from `bashProgressStore`,
+   * mirrored into the card while the command runs so the user sees progress
+   * on long commands (installs, test runs) instead of a frozen spinner.
+   */
+  bashProgress?: BashProgress;
 }
 
 export interface UsageSummary {
@@ -44,6 +57,8 @@ export interface PermissionPromptState {
   summary: string;
   risk: string;
   ruleHint: string;
+  /** Raw tool input — drives the file diff / new-file preview for Edit/Write. */
+  input?: Record<string, unknown>;
   /** For ExitPlanMode: enables the richer plan approval prompt. */
   isPlanExit?: boolean;
   /** Plan file content for preview in the exit dialog. */
@@ -56,12 +71,29 @@ export interface CommandSuggestion {
   name: string;
   description: string;
   isSelected?: boolean;
+  /** Scope tag shown after the name, e.g. "local" (project cmd) or "skill". */
+  tag?: string;
+}
+
+/** A `@`-typeahead candidate: a file or directory under the working dir. */
+export interface FileSuggestion {
+  /** Path as it will be inserted (relative, dirs end with "/"). */
+  path: string;
+  isDirectory: boolean;
+  isSelected?: boolean;
 }
 
 export interface SystemNotice {
   tone: "info" | "error";
   title: string;
   body: string;
+  /**
+   * When true the notice is a slash-command result panel: it pins above the
+   * input, blocks typing, and is dismissed with Esc (mirrors Claude's
+   * `shouldHidePromptInput` local-jsx commands). Transient notices leave it
+   * unset and don't block input.
+   */
+  dismissable?: boolean;
 }
 
 export interface SessionViewState {

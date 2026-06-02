@@ -933,14 +933,14 @@ export class QueryEngine {
     }
     const lines = [`Skills (${all.length} loaded)`, ""];
     for (const skill of all) {
-      const flags: string[] = [skill.source];
-      if (skill.frontmatter.disableModelInvocation) flags.push("hidden-from-model");
-      if (skill.frontmatter.paths) flags.push(`conditional: ${skill.frontmatter.paths.join(",")}`);
+      const meta: string[] = [skill.source];
+      if (skill.frontmatter.disableModelInvocation) meta.push("hidden-from-model");
+      if (skill.frontmatter.paths) meta.push(`conditional: ${skill.frontmatter.paths.join(",")}`);
       if (skill.frontmatter.allowedTools.length > 0) {
-        flags.push(`allowed-tools: ${skill.frontmatter.allowedTools.join(",")}`);
+        meta.push(`allowed-tools: ${skill.frontmatter.allowedTools.join(",")}`);
       }
-      lines.push(`  /${skill.name}    ${skill.description}`);
-      lines.push(`        [${flags.join("] [")}]`);
+      lines.push(`  /${skill.name} — ${skill.description}`);
+      lines.push(`    ${meta.join(" · ")}`);
     }
     lines.push("", "Invoke a skill with /<name> [args], or let the model call it via the Skill tool.");
     yield { type: "command", kind: "info", message: lines.join("\n") };
@@ -1002,10 +1002,10 @@ export class QueryEngine {
       const desc = agent.whenToUse.length > 200
         ? `${agent.whenToUse.slice(0, 197)}…`
         : agent.whenToUse;
-      lines.push(`  ${agent.agentType}    ${desc}`);
-      lines.push(`        [${tags.join("] [")}]`);
+      lines.push(`  ${agent.agentType} — ${desc}`);
+      lines.push(`    ${tags.join(" · ")}`);
       if (agent.filePath) {
-        lines.push(`        ${agent.filePath}`);
+        lines.push(`    ${agent.filePath}`);
       }
     }
     lines.push(

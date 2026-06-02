@@ -141,19 +141,6 @@ Hooks (stage 22 — user-defined shell scripts on lifecycle events):
     console.error(`[easy-agent] commands bootstrap failed: ${(error as Error).message}`);
   });
 
-  // Stage 21 — Agent Teams startup notice. Mirrors source's
-  // `isAgentSwarmsEnabled()` boot log. Two reasons we log loudly:
-  //   1. Three extra tools (TeamCreate / TeamDelete / SendMessage)
-  //      become visible to the model — users should know.
-  //   2. Team metadata is persisted under ~/.easy-agent/teams/ — users
-  //      who didn't realize they enabled it deserve a one-line heads-up.
-  const { isAgentTeamsEnabled } = await import("../utils/agentTeamsEnabled.js");
-  if (isAgentTeamsEnabled()) {
-    console.warn(
-      "[easy-agent] Agent Teams enabled — TeamCreate / TeamDelete / SendMessage tools are exposed to the model.",
-    );
-  }
-
   // Sandbox availability: if the user opted in via settings.json but
   // the host can't run sandbox-exec, surface the reason loudly. Silent
   // fall-back is a security footgun — users assume protection that
@@ -200,9 +187,17 @@ Hooks (stage 22 — user-defined shell scripts on lifecycle events):
   // This matches Claude Code's behavior — its `prefetchAllMcpResources`
   // runs inside `useManageMCPConnections` (a React useEffect), so the
   // REPL is interactive from frame 1 too.
+  const { logWarn } = await import("../utils/log.js");
   void bootstrapMcp(process.cwd()).catch((error) => {
-    console.error(`[easy-agent] MCP bootstrap failed: ${(error as Error).message}`);
+    logWarn(`MCP bootstrap failed: ${(error as Error).message}`);
   });
+
+  // Mark the UI as live BEFORE render() so any background warning that
+  // resolves during/after the first frame (e.g. a slow MCP connect failing)
+  // is routed into the in-UI notice bus instead of being printed straight to
+  // stderr where it would tear through Ink's rendered frame.
+  const { setUiActive } = await import("../state/uiNoticeStore.js");
+  setUiActive(true);
 
   const { waitUntilExit } = render(
     React.createElement(App, { model: resolvedModel, permissionMode, resumeSessionId, shouldResume }),

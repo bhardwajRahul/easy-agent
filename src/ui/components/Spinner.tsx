@@ -29,11 +29,15 @@ const COLOR_SHIMMER = "#F59575";
 // Sentinel: callers that pass "Thinking" want the random-verb behavior.
 const DEFAULT_LABEL_SENTINEL = "Thinking";
 
+const COLOR_HINT = "#8A8A94"; // muted — matches theme.muted
+
 interface SpinnerProps {
   label?: string;
+  /** Append a dim `(Ns · esc to interrupt)` suffix. Defaults to true. */
+  showHint?: boolean;
 }
 
-export function Spinner({ label }: SpinnerProps): React.ReactNode {
+export function Spinner({ label, showHint = true }: SpinnerProps): React.ReactNode {
   const [randomVerb] = useState(sampleSpinnerVerb);
   const verb = !label || label === DEFAULT_LABEL_SENTINEL ? randomVerb : label;
   const message = `${verb}\u2026`;
@@ -50,12 +54,21 @@ export function Spinner({ label }: SpinnerProps): React.ReactNode {
 
   const { before, shimmer, after } = sliceShimmer(message, time);
 
+  // Elapsed seconds + interrupt affordance — mirrors Claude's
+  // `(12s · esc to interrupt)`. Shows the timer only past 1s so a quick turn
+  // doesn't flash "0s"; the interrupt hint is always useful while running.
+  const seconds = Math.floor(time / 1000);
+  const hint = showHint
+    ? `  (${seconds >= 1 ? `${seconds}s \u00b7 ` : ""}esc to interrupt)`
+    : "";
+
   return (
     <Text>
       <Text color={COLOR_BASE}>{star} </Text>
       {before ? <Text color={COLOR_BASE}>{before}</Text> : null}
       {shimmer ? <Text color={COLOR_SHIMMER}>{shimmer}</Text> : null}
       {after ? <Text color={COLOR_BASE}>{after}</Text> : null}
+      {hint ? <Text color={COLOR_HINT}>{hint}</Text> : null}
     </Text>
   );
 }

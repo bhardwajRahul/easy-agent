@@ -101,6 +101,45 @@ export async function updateUserSettings(
 }
 
 /**
+ * Resolved status-line command config. `null` means "no custom command —
+ * render the built-in segmented status line".
+ */
+export interface StatusLineCommandConfig {
+  command: string;
+  /** Optional left padding (columns) the user can request. */
+  padding?: number;
+}
+
+/**
+ * Read the `statusLine` setting, merging user + project (PROJECT wins). Accepts
+ * two shapes for ergonomics, mirroring how source treats `statusLine`:
+ *   - a bare string  → treated as the command
+ *   - an object       → { type?: "command", command: string, padding?: number }
+ * Returns null when unset or malformed (the UI then shows its default line).
+ */
+export async function readStatusLineConfig(
+  cwd: string,
+): Promise<StatusLineCommandConfig | null> {
+  const [user, project] = await Promise.all([
+    readJsonSettingsFile<Record<string, unknown>>(getUserSettingsPath()),
+    readJsonSettingsFile<Record<string, unknown>>(getProjectSettingsPath(cwd)),
+  ]);
+  const raw = project.raw?.["statusLine"] ?? user.raw?.["statusLine"];
+  if (!raw) return null;
+  if (typeof raw === "string") {
+    return raw.trim() ? { command: raw.trim() } : null;
+  }
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    const command = typeof obj["command"] === "string" ? obj["command"].trim() : "";
+    if (!command) return null;
+    const padding = typeof obj["padding"] === "number" ? obj["padding"] : undefined;
+    return padding !== undefined ? { command, padding } : { command };
+  }
+  return null;
+}
+
+/**
  * Read a single top-level string setting, merging user + project scopes
  * with PROJECT winning (project overrides user — same precedence as the
  * MCP / permissions loaders). Returns undefined when the key is absent or

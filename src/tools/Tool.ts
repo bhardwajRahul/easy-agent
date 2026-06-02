@@ -13,6 +13,38 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 
+// ─── Interactive questions (AskUserQuestion) ───────────────────────
+
+/** One selectable choice within a question. */
+export interface UserQuestionOption {
+  label: string;
+  description?: string;
+}
+
+/** A single multiple-choice question to put to the user. */
+export interface UserQuestion {
+  /** Full question text, e.g. "Which date library should we use?". */
+  question: string;
+  /** Short chip/tag label, e.g. "Library". */
+  header: string;
+  /** 2–4 mutually-exclusive (or, if multiSelect, combinable) options. */
+  options: UserQuestionOption[];
+  /** Allow selecting more than one option. */
+  multiSelect?: boolean;
+}
+
+export interface UserQuestionRequest {
+  questions: UserQuestion[];
+}
+
+export interface UserQuestionResponse {
+  /**
+   * Map of question text → the chosen option label(s). For multi-select
+   * questions the labels are joined with ", ".
+   */
+  answers: Record<string, string>;
+}
+
 // ─── Tool Context ──────────────────────────────────────────────────
 
 /** Runtime context passed to every tool invocation. */
@@ -33,6 +65,18 @@ export interface ToolContext {
    * `agentId ?? getSessionId()` lookup pattern in `appState.todos[todoKey]`.
    */
   sessionId?: string;
+
+  /**
+   * Stage 24 — interactive multiple-choice prompt. AskUserQuestion calls
+   * this to surface questions to the user and await their selection. The
+   * QueryEngine/UI wires it the same way as the permission prompt
+   * (a promise resolved when the user answers). Resolves to `null` if the
+   * user cancels or no interactive frontend is attached (headless). Tools
+   * other than AskUserQuestion ignore it.
+   */
+  requestUserQuestion?: (
+    request: UserQuestionRequest,
+  ) => Promise<UserQuestionResponse | null>;
 
   // ─── Sub-agent spawning support (stage 19) ────────────────────────
   //

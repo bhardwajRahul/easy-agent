@@ -1,18 +1,93 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
-import { formatErrorBody, formatToolInputPreview } from "../utils/toolCardFormat.js";
+import { extractBashOutput, formatErrorBody, summarizeTool } from "../utils/toolCardFormat.js";
+import { Markdown } from "../markdown/Markdown.js";
+import { StructuredDiff } from "./StructuredDiff.js";
+import { ResultLine, ToolCardHeader, ToolResultSummary } from "./ToolCard.js";
+import { theme, glyph } from "../theme.js";
+
+// Safety cap on how many output lines a verbose Bash card prints, so a runaway
+// command (npm install, a 50k-line log) can't blow up the frame.
+const BASH_VERBOSE_MAX_LINES = 200;
+
+/** First non-empty line of a block of text (the condensed one-liner). */
+function firstLine(text: string): string {
+  for (const line of text.split("\n")) {
+    if (line.trim()) return line;
+  }
+  return text.split("\n")[0] ?? "";
+}
+
+/**
+ * Column of output lines (no gutter) — meant to sit inside a <ResultLine>,
+ * which supplies the dimmed `⎿` corner. Caps at `max` with a "+N more" footer.
+ */
+function OutputBody({
+  text,
+  color,
+  max = Infinity,
+}: {
+  text: string;
+  color?: string;
+  max?: number;
+}): React.ReactNode {
+  const lines = text.split("\n");
+  const shown = Number.isFinite(max) ? lines.slice(0, max) : lines;
+  const hidden = lines.length - shown.length;
+  return (
+    <>
+      {shown.map((line, i) => (
+        <Text key={i} color={color ?? theme.muted}>{line || " "}</Text>
+      ))}
+      {hidden > 0 ? (
+        <Text color={theme.muted}>{`… +${hidden} more line${hidden === 1 ? "" : "s"}`}</Text>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Full-width grey bar behind a user prompt. We set an EXPLICIT pixel width
+ * (terminal columns minus the root's paddingX) rather than `width: "100%"`:
+ * inside <Static>, `100%` resolves to the full terminal width and ignores the
+ * root padding, making the bar ~2 cols too wide so its background wrapped onto
+ * a stray extra line. A concrete width fills the line edge-to-edge with no
+ * overflow. Long messages still wrap, with the background filling each line.
+ */
+function UserMessageBar({
+  caret,
+  text,
+  textColor,
+}: {
+  caret: string;
+  text: string;
+  textColor: string;
+}): React.ReactNode {
+  const { stdout } = useStdout();
+  const columns = stdout?.columns ?? 80;
+  // Root Box uses paddingX={1} → 1 column reserved on each side.
+  const width = Math.max(8, columns - 2);
+  return (
+    <Box marginTop={1}>
+      <Box width={width} backgroundColor={theme.userBarBg} paddingX={1}>
+        <Text color={theme.brand} bold>{`${caret} `}</Text>
+        <Text color={textColor}>{text}</Text>
+      </Box>
+    </Box>
+  );
+}
 
 interface ConversationViewProps {
   messages: MessageParam[];
 }
 
-interface ToolResultInfo {
+export interface ToolResultInfo {
   content: string;
   isError: boolean;
 }
 
-function isInternalMessage(message: MessageParam): boolean {
+export function isInternalMessage(message: MessageParam): boolean {
   const content = typeof message.content === "string" ? message.content : "";
   if (content.startsWith("[CompactBoundary]")) return true;
   if (content.startsWith("This session is being continued from a previous conversation")) return true;
@@ -120,7 +195,7 @@ function taskNotificationStyle(
  * in claude-code-source-code/src/utils/messages.ts so we stay
  * source-compatible (matters once we add /resume).
  */
-function extractCommandMarker(
+export function extractCommandMarker(
   message: MessageParam,
 ): { name: string; args: string } | null {
   if (typeof message.content !== "string") return null;
@@ -140,7 +215,7 @@ function extractCommandMarker(
  * its parent tool_use. The assistant's tool_use blocks are then rendered
  * inline (see below) with their matching result pulled from this map.
  */
-function buildToolResultMap(messages: MessageParam[]): Map<string, ToolResultInfo> {
+export function buildToolResultMap(messages: MessageParam[]): Map<string, ToolResultInfo> {
   const map = new Map<string, ToolResultInfo>();
   for (const msg of messages) {
     if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
@@ -221,10 +296,13 @@ function InlineToolCard({
   name,
   input,
   result,
+  verbose,
 }: {
   name: string;
   input: Record<string, unknown> | undefined;
   result: ToolResultInfo;
+  /** Global Ctrl+O verbose flag: false = condensed `⎿` summary only. */
+  verbose: boolean;
 }): React.ReactNode {
   // Agent calls get the same dedicated rendering as live SubAgentCard,
   // just without the running spinner — see InlineAgentCard.
@@ -232,159 +310,319 @@ function InlineToolCard({
     return <InlineAgentCard input={input} result={result} />;
   }
 
-  const inputPreview = formatToolInputPreview(input);
+  const line = summarizeTool(name, input, result.content);
+  const state = result.isError ? "error" : "ok";
 
-  if (result.isError) {
+  // Bash: header shows `Bash(command)`. Condensed → first output line + an
+  // expand hint; verbose → the full (capped) stdout/stderr under the corner.
+  if (name === "Bash") {
+    const output = extractBashOutput(result.content);
+    const bodyColor = result.isError ? theme.error : undefined;
+    if (!output) {
+      return (
+        <Box flexDirection="column">
+          <ToolCardHeader line={line} state={state} />
+          <ToolResultSummary line={line} />
+        </Box>
+      );
+    }
+    const multiLine = output.includes("\n");
     return (
-      <Box marginLeft={2} flexDirection="column">
-        <Text color="red">
-          {"  \u2717 "}{name}
-          {inputPreview ? <Text dimColor>{"  "}({inputPreview})</Text> : null}
-          <Text color="red">{" — error"}</Text>
-        </Text>
-        {result.content ? (
-          <Box marginLeft={4} flexDirection="column">
-            <Text color="red">{formatErrorBody(result.content)}</Text>
-          </Box>
-        ) : null}
+      <Box flexDirection="column">
+        <ToolCardHeader line={line} state={state} />
+        {verbose ? (
+          <ResultLine>
+            <OutputBody text={output} color={bodyColor} max={BASH_VERBOSE_MAX_LINES} />
+          </ResultLine>
+        ) : (
+          <ResultLine>
+            <Text>
+              <Text color={bodyColor ?? theme.muted}>{firstLine(output)}</Text>
+              {multiLine ? <Text color={theme.muted}>{"  (ctrl+o to expand)"}</Text> : null}
+            </Text>
+          </ResultLine>
+        )}
       </Box>
     );
   }
 
-  return (
-    <Box marginLeft={2}>
-      <Text>
-        <Text color="green">{"  \u2713 "}{name}</Text>
-        {inputPreview ? (
-          <Text dimColor>{"  "}({inputPreview})</Text>
+  // Errors (non-Bash): condensed → first error line + hint; verbose → full body.
+  if (result.isError) {
+    const body = formatErrorBody(result.content);
+    const multiLine = body.includes("\n");
+    return (
+      <Box flexDirection="column">
+        <ToolCardHeader line={line} state="error" />
+        {result.content ? (
+          verbose ? (
+            <ResultLine>
+              <OutputBody text={body} color={theme.error} />
+            </ResultLine>
+          ) : (
+            <ResultLine>
+              <Text>
+                <Text color={theme.error}>{firstLine(body)}</Text>
+                {multiLine ? <Text color={theme.muted}>{"  (ctrl+o to expand)"}</Text> : null}
+              </Text>
+            </ResultLine>
+          )
         ) : (
-          <Text dimColor> ({result.content.length} chars)</Text>
+          <ToolResultSummary line={line} />
         )}
-      </Text>
+      </Box>
+    );
+  }
+
+  // Edit → colored diff of the old/new fragments. Write (new file) → content
+  // as all-added green lines. Read/Grep/Glob have no richer body, so they
+  // always show just the `⎿` summary. Diff bodies are gated behind verbose.
+  const oldStr = typeof input?.old_string === "string" ? (input.old_string as string) : undefined;
+  const newStr = typeof input?.new_string === "string" ? (input.new_string as string) : undefined;
+  const writeContent = name === "Write" && typeof input?.content === "string" ? (input.content as string) : undefined;
+  const hasDiff = (name === "Edit" && oldStr !== undefined && newStr !== undefined) || writeContent !== undefined;
+
+  return (
+    <Box flexDirection="column">
+      <ToolCardHeader line={line} state="ok" />
+      {verbose && name === "Edit" && oldStr !== undefined && newStr !== undefined ? (
+        <>
+          <ToolResultSummary line={line} />
+          <StructuredDiff oldText={oldStr} newText={newStr} />
+        </>
+      ) : verbose && writeContent !== undefined ? (
+        <>
+          <ToolResultSummary line={line} />
+          <StructuredDiff oldText="" newText={writeContent} />
+        </>
+      ) : (
+        <ToolResultSummary line={line} expandable={hasDiff} />
+      )}
     </Box>
   );
 }
 
-export function ConversationView({ messages }: ConversationViewProps): React.ReactNode {
-  const toolResults = buildToolResultMap(messages);
+// Read-only inspection tools whose consecutive runs collapse into one
+// summary line. Mirrors source's collapseReadSearch — a turn that reads 6
+// files + greps twice shouldn't print 8 separate cards.
+const GROUPABLE_TOOLS = new Set(["Read", "Grep", "Glob"]);
+const GROUP_MIN = 2;
+const GROUP_TARGET_PREVIEW = 4;
 
+interface GroupMember {
+  name: string;
+  input: Record<string, unknown> | undefined;
+  result: ToolResultInfo;
+}
+
+/**
+ * Collapsed card for a run of consecutive Read/Grep/Glob calls. Header counts
+ * each tool kind ("Read 3 · Grep 2"); the `⎿` line lists the first few targets
+ * so the paths aren't lost. Full per-call detail still lives in the Ctrl+O
+ * transcript.
+ */
+function GroupedReadSearchCard({ members }: { members: GroupMember[] }): React.ReactNode {
+  const counts = new Map<string, number>();
+  const targets: string[] = [];
+  for (const m of members) {
+    counts.set(m.name, (counts.get(m.name) ?? 0) + 1);
+    const line = summarizeTool(m.name, m.input, m.result.content);
+    if (line.target) targets.push(line.target);
+  }
+  const label = [...counts.entries()].map(([n, c]) => `${n} ${c}`).join(" · ");
+  const preview = targets.slice(0, GROUP_TARGET_PREVIEW);
+  const hidden = targets.length - preview.length;
+  const summary =
+    preview.join(", ") + (hidden > 0 ? `, +${hidden} more` : "");
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={theme.ok}>{`${glyph.toolDot} `}</Text>
+        <Text bold>{label}</Text>
+      </Box>
+      {summary ? (
+        <ResultLine>
+          <Text color={theme.muted} wrap="truncate-end">{summary}</Text>
+        </ResultLine>
+      ) : null}
+    </Box>
+  );
+}
+
+/**
+ * A single, independently-renderable unit of conversation history. Each
+ * item carries a STABLE key and is only ever produced once it's final —
+ * this is what lets us feed the history into Ink's `<Static>` (append-only,
+ * never-repainted) without losing tool cards that gain their result later.
+ *
+ * Stage 24 foundation: previously the whole `messages` array was rendered
+ * inside the live React frame, so every streaming tick repainted the entire
+ * conversation — that's the root cause of the terminal "refusing to scroll".
+ * Flattening to append-only items lets the committed history move into
+ * `<Static>` and stay out of the repaint loop entirely.
+ */
+export interface ConversationItem {
+  key: string;
+  element: React.ReactNode;
+}
+
+function renderUserBubble(content: string): React.ReactNode {
+  // Background sub-agent finished — compact one-line status pill.
+  const taskNotif = extractTaskNotification(content);
+  if (taskNotif) {
+    const { color, glyph } = taskNotificationStyle(taskNotif.status);
+    return (
+      <Box marginTop={1}>
+        <Text color={color}>{glyph}</Text>
+        <Text>{` Sub-agent `}</Text>
+        <Text bold color={color}>{taskNotif.agentType}</Text>
+        <Text>{` ${taskNotif.status}`}</Text>
+        {taskNotif.description ? <Text dimColor>{`  ${taskNotif.description}`}</Text> : null}
+        {taskNotif.usage ? <Text dimColor>{`  · ${taskNotif.usage}`}</Text> : null}
+      </Box>
+    );
+  }
+  return <UserMessageBar caret={glyph.userCaret} text={content} textColor={theme.userBarText} />;
+}
+
+/**
+ * Flatten the message log into an append-only list of display items.
+ *
+ * Invariant (required by `<Static>`): the returned list only grows — an
+ * item, once emitted, never changes content or key. We achieve this by:
+ *   - keying user/assistant text by message index (committed text is final)
+ *   - keying tool cards by the tool_use `id` (stable) and emitting them ONLY
+ *     after the matching tool_result lands, so a card never appears in a
+ *     half-finished state and never mutates afterwards.
+ * The single exception is wholesale replacement (`/clear`, `/compact`,
+ * resume), which shrinks the array — the caller detects that and remounts
+ * `<Static>` via a key bump.
+ */
+export function flattenConversation(
+  messages: MessageParam[],
+  verbose = false,
+): ConversationItem[] {
+  const toolResults = buildToolResultMap(messages);
+  const items: ConversationItem[] = [];
+
+  messages.forEach((message, index) => {
+    if (isInternalMessage(message)) return;
+
+    if (message.role === "user") {
+      if (typeof message.content === "string") {
+        const marker = extractCommandMarker(message);
+        if (marker) {
+          const display = `/${marker.name.replace(/^\//, "")}` + (marker.args ? ` ${marker.args}` : "");
+          items.push({
+            key: `u${index}`,
+            element: (
+              <UserMessageBar caret={glyph.userCaret} text={display} textColor={theme.brandLight} />
+            ),
+          });
+          return;
+        }
+        items.push({ key: `u${index}`, element: renderUserBubble(message.content) });
+      }
+      // Array content = tool_result blocks — surfaced via their tool_use item.
+      return;
+    }
+
+    if (message.role === "assistant") {
+      if (typeof message.content === "string") {
+        if (!message.content) return;
+        items.push({
+          key: `a${index}`,
+          element: (
+            <Box marginTop={1}>
+              <Text color={theme.assistant}>{`${glyph.assistant} `}</Text>
+              <Markdown content={message.content} />
+            </Box>
+          ),
+        });
+        return;
+      }
+
+      if (Array.isArray(message.content)) {
+        const blocks = message.content as Array<{
+          type?: string;
+          text?: string;
+          id?: string;
+          name?: string;
+          input?: Record<string, unknown>;
+        }>;
+        for (let j = 0; j < blocks.length; j++) {
+          const block = blocks[j];
+          if (block?.type === "text" && block.text) {
+            items.push({
+              key: `a${index}-t${j}`,
+              element: (
+                <Box marginTop={1}>
+                  <Text color={theme.assistant}>{`${glyph.assistant} `}</Text>
+                  <Markdown content={block.text} />
+                </Box>
+              ),
+            });
+            continue;
+          }
+          if (block?.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+            const result = toolResults.get(block.id);
+            // Only emit once the result is committed — keeps the list
+            // append-only (the live ToolCallList shows the in-flight card).
+            if (!result) continue;
+
+            // Collapse a contiguous run of successful Read/Grep/Glob calls
+            // into a single grouped card. The run is bounded by this
+            // assistant message, so by the time any result exists all of its
+            // results exist too — the grouped item is final on first emit and
+            // never mutates (preserving the <Static> append-only invariant).
+            if (GROUPABLE_TOOLS.has(block.name) && !result.isError) {
+              const run: GroupMember[] = [{ name: block.name, input: block.input, result }];
+              let k = j + 1;
+              while (k < blocks.length) {
+                const next = blocks[k];
+                if (
+                  next?.type !== "tool_use" ||
+                  typeof next.id !== "string" ||
+                  typeof next.name !== "string" ||
+                  !GROUPABLE_TOOLS.has(next.name)
+                )
+                  break;
+                const nextResult = toolResults.get(next.id);
+                if (!nextResult || nextResult.isError) break;
+                run.push({ name: next.name, input: next.input, result: nextResult });
+                k++;
+              }
+              if (run.length >= GROUP_MIN) {
+                items.push({
+                  key: `tug${block.id}`,
+                  element: <GroupedReadSearchCard members={run} />,
+                });
+                j = k - 1; // skip the consumed blocks
+                continue;
+              }
+            }
+
+            items.push({
+              key: `tu${block.id}`,
+              element: (
+                <InlineToolCard name={block.name} input={block.input} result={result} verbose={verbose} />
+              ),
+            });
+          }
+        }
+      }
+    }
+  });
+
+  return items;
+}
+
+export function ConversationView({ messages }: ConversationViewProps): React.ReactNode {
+  const items = flattenConversation(messages);
   return (
     <>
-      {messages.map((message, index) => {
-        if (isInternalMessage(message)) {
-          return null;
-        }
-
-        if (message.role === "user") {
-          if (typeof message.content === "string") {
-            // Stage 20: background sub-agent finished. The QueryEngine
-            // injects the raw `<task-notification>...</task-notification>`
-            // XML into the conversation as a `[task-notification]\n…`
-            // user message — perfect for the model, ugly for humans.
-            // Render a compact one-line status mirroring source's
-            // `UserAgentNotificationMessage`.
-            const taskNotif = extractTaskNotification(message.content);
-            if (taskNotif) {
-              const { color, glyph } = taskNotificationStyle(taskNotif.status);
-              return (
-                <Box key={`u${index}`} marginTop={1}>
-                  <Text color={color}>{glyph}</Text>
-                  <Text>{` Sub-agent `}</Text>
-                  <Text bold color={color}>{taskNotif.agentType}</Text>
-                  <Text>{` ${taskNotif.status}`}</Text>
-                  {taskNotif.description ? (
-                    <Text dimColor>{`  ${taskNotif.description}`}</Text>
-                  ) : null}
-                  {taskNotif.usage ? (
-                    <Text dimColor>{`  · ${taskNotif.usage}`}</Text>
-                  ) : null}
-                </Box>
-              );
-            }
-            // Slash-command marker (`<command-name>/skill</command-name>` …):
-            // render as a styled "❯ /name args" command bubble. Mirrors
-            // source's UserCommandMessage component so users see the same
-            // breadcrumb whether the command was a built-in or a skill.
-            const marker = extractCommandMarker(message);
-            if (marker) {
-              const display = `/${marker.name.replace(/^\//, "")}` +
-                (marker.args ? ` ${marker.args}` : "");
-              return (
-                <Box key={`u${index}`} marginTop={1}>
-                  <Text color="cyan" dimColor>{"❯ "}</Text>
-                  <Text color="cyan">{display}</Text>
-                </Box>
-              );
-            }
-            return (
-              <Box key={`u${index}`} marginTop={1}>
-                <Text color="green" bold>{"❯ "}</Text>
-                <Text>{message.content}</Text>
-              </Box>
-            );
-          }
-          // Array content = tool_result blocks — already rendered inline
-          // alongside their parent tool_use above.
-          return null;
-        }
-
-        if (message.role === "assistant") {
-          if (typeof message.content === "string") {
-            if (!message.content) return null;
-            return (
-              <Box key={`a${index}`}>
-                <Text color="magenta">{"\u258E "}</Text>
-                <Text>{message.content}</Text>
-              </Box>
-            );
-          }
-
-          if (Array.isArray(message.content)) {
-            const blocks = message.content as Array<{
-              type?: string;
-              text?: string;
-              id?: string;
-              name?: string;
-              input?: Record<string, unknown>;
-            }>;
-            const items: React.ReactNode[] = [];
-            blocks.forEach((block, j) => {
-              if (block?.type === "text" && block.text) {
-                items.push(
-                  <Box key={`t${j}`}>
-                    <Text color="magenta">{"\u258E "}</Text>
-                    <Text>{block.text}</Text>
-                  </Box>,
-                );
-                return;
-              }
-              if (block?.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
-                const result = toolResults.get(block.id);
-                // Pending tool calls (no result yet) are handled by the
-                // live ToolCallList; we only render inline once the result
-                // has been committed to the message history.
-                if (!result) return;
-                items.push(
-                  <InlineToolCard
-                    key={`tu${j}`}
-                    name={block.name}
-                    input={block.input}
-                    result={result}
-                  />,
-                );
-              }
-            });
-            if (items.length === 0) return null;
-            return (
-              <Box key={`a${index}`} flexDirection="column">
-                {items}
-              </Box>
-            );
-          }
-        }
-
-        return null;
-      })}
+      {items.map((item) => (
+        <React.Fragment key={item.key}>{item.element}</React.Fragment>
+      ))}
     </>
   );
 }

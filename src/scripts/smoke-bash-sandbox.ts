@@ -61,6 +61,15 @@ async function main(): Promise<void> {
   expect("violation tag present in tool result", denied.content.includes("<sandbox_violations>"));
   expect("no rogue file landed in /etc", !fs.existsSync("/etc/easy-agent-bash-test"));
 
+  console.log(`\n[2b] Redirect to /dev/null works under the sandbox`);
+  const devnull = await bashTool.call(
+    { command: `ls "${work}" 2>/dev/null && echo "---" && echo done` },
+    { cwd: work },
+  );
+  expect("not an error", !devnull.isError, devnull.content);
+  expect("no /dev/null permission violation", !devnull.content.includes("Operation not permitted"), devnull.content);
+  expect("stdout reached the echo after the redirect", devnull.content.includes("done"));
+
   console.log(`\n[3] dangerouslyDisableSandbox + allowUnsandboxedCommands → bypass`);
   const escaped = await bashTool.call(
     { command: "echo escape", dangerouslyDisableSandbox: true },

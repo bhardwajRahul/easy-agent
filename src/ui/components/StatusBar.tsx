@@ -1,7 +1,10 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { Spinner } from "./Spinner.js";
+import { StreamingMarkdown } from "../markdown/Markdown.js";
 import { PlanApprovalDialog } from "./PlanApprovalDialog.js";
+import { PermissionRequestCard } from "./PermissionRequestCard.js";
+import { theme, glyph } from "../theme.js";
 import type { PermissionDecision } from "../../permissions/permissions.js";
 import type { PermissionPromptState, UsageSummary } from "../types.js";
 
@@ -11,7 +14,6 @@ interface StatusBarProps {
   streamingText: string;
   lastUsage: UsageSummary | null;
   permissionPrompt: PermissionPromptState | null;
-  permissionMode: string;
   onPlanDecision?: (decision: PermissionDecision, feedback?: string) => void;
 }
 
@@ -21,15 +23,10 @@ export function StatusBar({
   streamingText,
   lastUsage,
   permissionPrompt,
-  permissionMode,
   onPlanDecision,
 }: StatusBarProps): React.ReactNode {
   return (
     <>
-      <Box>
-        <Text dimColor>{"  mode: "}{permissionMode}</Text>
-      </Box>
-
       {permissionPrompt && permissionPrompt.isPlanExit && onPlanDecision && (
         <PlanApprovalDialog
           planContent={permissionPrompt.planContent}
@@ -40,13 +37,7 @@ export function StatusBar({
       )}
 
       {permissionPrompt && !permissionPrompt.isPlanExit && (
-        <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
-          <Text color="yellow">{"⚠ Permission required: "}{permissionPrompt.toolName}</Text>
-          <Text dimColor>{"  args: "}{permissionPrompt.summary}</Text>
-          <Text dimColor>{"  risk: "}{permissionPrompt.risk}</Text>
-          <Text dimColor>{"  always allow rule: "}{permissionPrompt.ruleHint}</Text>
-          <Text color="cyan">{"  [y] allow once   [n] deny   [a] always allow (session)"}</Text>
-        </Box>
+        <PermissionRequestCard prompt={permissionPrompt} />
       )}
 
       {isLoading && !streamingText && !permissionPrompt && (
@@ -56,32 +47,21 @@ export function StatusBar({
       )}
 
       {isLoading && streamingText && !permissionPrompt && (
-        <Box marginTop={0}>
-          <Text color="magenta">{"\u258E "}</Text>
-          <Text>{streamingText}</Text>
+        <Box marginTop={1}>
+          <Text color={theme.assistant}>{`${glyph.assistant} `}</Text>
+          <StreamingMarkdown content={streamingText} />
         </Box>
       )}
 
       {lastUsage && !isLoading && (
-        <Box flexDirection="column">
-          <Text dimColor>
-            {"  tokens: "}
-            {lastUsage.input + lastUsage.output}
-            {" total ("}
-            {lastUsage.input}
-            {" in / "}
-            {lastUsage.output}
-            {" out)"}
+        <Box marginTop={1}>
+          <Text color={theme.muted}>
+            {`${lastUsage.input + lastUsage.output} tokens`}
+            {` (${lastUsage.input} in / ${lastUsage.output} out)`}
+            {typeof lastUsage.contextPercent === "number"
+              ? `  ${glyph.bullet}  context ${lastUsage.contextPercent}%`
+              : ""}
           </Text>
-          {typeof lastUsage.contextTokens === "number" && typeof lastUsage.contextPercent === "number" && (
-            <Text dimColor>
-              {"  context: ~"}
-              {lastUsage.contextTokens}
-              {" tokens ("}
-              {lastUsage.contextPercent}
-              {"% of max window)"}
-            </Text>
-          )}
         </Box>
       )}
     </>

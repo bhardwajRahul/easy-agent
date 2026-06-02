@@ -8,6 +8,11 @@ import {
   wrapWithSandbox,
   type ResolvedSandboxSettings,
 } from "../sandbox/index.js";
+import {
+  appendBashProgress,
+  completeBashProgress,
+  startBashProgress,
+} from "../state/bashProgressStore.js";
 
 interface BashInput {
   command: string;
@@ -143,6 +148,12 @@ export const bashTool: Tool = {
       executedCommand = wrap.wrappedCommand;
     }
 
+    // Live progress: publish stdout/stderr chunks keyed by this call's
+    // tool_use id so the UI can show the command's tail while it runs. Only
+    // active when an interactive frontend supplied a toolUseId.
+    const progressId = context.toolUseId;
+    if (progressId) startBashProgress(progressId);
+
     return await new Promise<ToolResult>((resolve) => {
       const child = spawn(process.env.SHELL || "bash", ["-lc", executedCommand], {
         cwd: context.cwd,
@@ -156,6 +167,7 @@ export const bashTool: Tool = {
       const finish = (result: ToolResult) => {
         if (settled) return;
         settled = true;
+        if (progressId) completeBashProgress(progressId);
         resolve(result);
       };
 
@@ -173,10 +185,14 @@ export const bashTool: Tool = {
       context.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
       child.stdout.on("data", (chunk: Buffer | string) => {
-        stdout += chunk.toString();
+        const text = chunk.toString();
+        stdout += text;
+        if (progressId) appendBashProgress(progressId, text);
       });
       child.stderr.on("data", (chunk: Buffer | string) => {
-        stderr += chunk.toString();
+        const text = chunk.toString();
+        stderr += text;
+        if (progressId) appendBashProgress(progressId, text);
       });
       child.on("error", (error) => {
         clearTimeout(timeoutId);

@@ -25,6 +25,7 @@ import { taskUpdateTool } from "./taskUpdateTool.js";
 import { taskGetTool } from "./taskGetTool.js";
 import { taskListTool } from "./taskListTool.js";
 import { skillTool } from "./skillTool.js";
+import { askUserQuestionTool } from "./askUserQuestionTool.js";
 import { agentTool } from "./agentTool.js";
 import { teamCreateTool } from "./teamCreateTool.js";
 import { teamDeleteTool } from "./teamDeleteTool.js";
@@ -47,6 +48,7 @@ const BUILTIN_TOOLS: Tool[] = [
   enterPlanModeTool,
   exitPlanModeTool,
   skillTool,
+  askUserQuestionTool,
   agentTool,
   // Stage 21 — Agent Teams. The three tools below all gate themselves
   // on isAgentTeamsEnabled() in their `isEnabled()` methods, so when

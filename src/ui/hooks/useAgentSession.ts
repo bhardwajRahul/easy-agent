@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useStdout } from "ink";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
 import { QueryEngine } from "../../core/queryEngine.js";
 import { buildTokenBudgetSnapshot } from "../../utils/tokens.js";
@@ -17,7 +18,11 @@ import {
   type PermissionRuleSet,
   type PermissionSettings,
 } from "../../permissions/permissions.js";
-import type { ToolContext } from "../../tools/Tool.js";
+import type {
+  ToolContext,
+  UserQuestionRequest,
+  UserQuestionResponse,
+} from "../../tools/Tool.js";
 import { readPlan, getPlanFilePath, getPlansDirectory } from "../../context/plans.js";
 import type {
   PermissionPromptState,
@@ -25,7 +30,8 @@ import type {
   ToolCallInfo,
   UsageSummary,
 } from "../types.js";
-import { formatToolInputPreview } from "../utils/toolCardFormat.js";
+import { formatToolInputPreview, extractBashOutput } from "../utils/toolCardFormat.js";
+import { bashTool } from "../../tools/bashTool.js";
 import { clearTodos, getTodos, subscribeTodos } from "../../state/todoStore.js";
 import type { TodoItem } from "../../types/todo.js";
 import { getTaskListId, listTasks, subscribeTasks } from "../../state/taskStore.js";
@@ -34,6 +40,11 @@ import {
   getSubAgentProgress,
   subscribeSubAgentProgress,
 } from "../../state/subAgentProgressStore.js";
+import {
+  clearAllBashProgress,
+  subscribeBashProgress,
+} from "../../state/bashProgressStore.js";
+import { clearUiNotices } from "../../state/uiNoticeStore.js";
 import {
   getAllAsyncAgents,
   subscribeAsyncAgents,
@@ -72,6 +83,7 @@ interface ToolCallCompletion {
   displayName?: string;
   displayHint?: string;
   inputPreview?: string;
+  input?: Record<string, unknown>;
   errorMessage?: string;
 }
 
@@ -92,117 +104,71 @@ function markToolCallComplete(
   );
 }
 
+/**
+ * Split a command message into a header title + body. The first non-empty
+ * line becomes the panel title (e.g. "Skills (3 loaded)", "Model status"),
+ * and the remaining lines become the body — removing the duplication of
+ * rendering the same header both as the panel title and as the first body row.
+ */
+function splitHeader(message: string): { title: string; body: string } {
+  const lines = message.split("\n");
+  const title = (lines.shift() ?? "").trim();
+  while (lines.length > 0 && lines[0]!.trim() === "") lines.shift();
+  return { title, body: lines.join("\n") };
+}
+
 function buildCommandNotice(message: string, kind: "info" | "error"): SystemNotice {
   if (message.startsWith("Commands:")) {
     return {
       tone: "info",
       title: "Available commands",
       body: [
-        "/help  Show available commands",
-        "/clear  Clear conversation history",
-        "/cost  Show session token usage",
-        "/model [name|default]  Inspect or override the session model",
-        "/mode [default|plan|auto]  Inspect or switch permission mode",
-        "/tasks [task|todo|reset]  Switch task system or reset the task graph",
-        "/mcp  Inspect MCP servers and their tools",
-        "/skills  List loaded skills (user + project scope)",
-        "/<skill-name> [args]  Run a registered skill as a chat turn",
-        "/<command> [args]  Run a user-defined command (~/.easy-agent/commands)",
-        "/output-style [name]  Inspect or switch the answer style",
-        "/agents  List built-in + custom sub-agent definitions",
-        "/history  Show saved sessions for this project",
-        "/compact  Compact conversation context",
-        "/exit | /quit | /bye  Exit session",
+        "/help — Show available commands",
+        "/clear — Clear conversation history",
+        "/cost — Show session token usage",
+        "/model [name|default] — Inspect or override the session model",
+        "/mode [default|plan|auto] — Inspect or switch permission mode",
+        "/tasks [task|todo|reset] — Switch task system or reset the task graph",
+        "/mcp — Inspect MCP servers and their tools",
+        "/skills — List loaded skills (user + project scope)",
+        "/<skill-name> [args] — Run a registered skill as a chat turn",
+        "/<command> [args] — Run a user-defined command (~/.easy-agent/commands)",
+        "/output-style [name] — Inspect or switch the answer style",
+        "/agents — List built-in + custom sub-agent definitions",
+        "/history — Show saved sessions for this project",
+        "/compact — Compact conversation context",
+        "/exit | /quit | /bye — Exit session",
       ].join("\n"),
     };
   }
 
-  if (message.startsWith("Session usage") || message.startsWith("Recent sessions:")) {
-    return {
-      tone: kind,
-      title: message.startsWith("Recent sessions:") ? "Session history" : "Session usage",
-      body: message,
-    };
+  if (message.startsWith("Unknown command:") || message.startsWith("Unknown skill:")) {
+    const { title, body } = splitHeader(message);
+    return { tone: "error", title, body };
   }
 
-  if (message.startsWith("Model status") || message.startsWith("Model updated")) {
-    return {
-      tone: kind,
-      title: message.startsWith("Model status") ? "Model status" : "Model updated",
-      body: message,
-    };
+  // Errors: keep the full text as the body under a short label unless the
+  // message already reads as a header + detail block.
+  if (kind === "error") {
+    const { title, body } = splitHeader(message);
+    return body ? { tone: "error", title, body } : { tone: "error", title: "Error", body: message };
   }
 
-  if (message.startsWith("Task system")) {
-    return {
-      tone: kind,
-      title: message.startsWith("Task system status") ? "Task system" : "Task system updated",
-      body: message,
-    };
-  }
-
-  if (
-    message.startsWith("MCP Servers") ||
-    message.startsWith("MCP tools from") ||
-    message.startsWith("MCP server '")
-  ) {
-    return {
-      tone: kind,
-      title: "MCP",
-      body: message,
-    };
-  }
-
-  if (message.startsWith("Skills (") || message === "No skills loaded.") {
-    return {
-      tone: kind,
-      title: "Skills",
-      body: message,
-    };
-  }
-
-  if (message.startsWith("Agents (")) {
-    return {
-      tone: kind,
-      title: "Agents",
-      body: message,
-    };
-  }
-
-  if (
-    message.startsWith("Output style") ||
-    message.startsWith("Output style is already") ||
-    message.startsWith("Output style not found")
-  ) {
-    return {
-      tone: kind,
-      title: "Output style",
-      body: message,
-    };
-  }
-
-  if (message.startsWith("Unknown command:")) {
-    return {
-      tone: "error",
-      title: "Unknown command",
-      body: message,
-    };
-  }
-
-  if (message === "Conversation cleared.") {
-    return {
-      tone: "info",
-      title: "Conversation reset",
-      body: message,
-    };
-  }
-
-  return {
-    tone: kind,
-    title: kind === "error" ? "Command error" : "System message",
-    body: message,
-  };
+  // Generic info commands (skills / agents / model / task / mcp / output-style
+  // / session usage / cleared …): first line is the section header, the rest
+  // is the detail body. One rule replaces a dozen hand-written branches.
+  const { title, body } = splitHeader(message);
+  return { tone: "info", title, body };
 }
+
+// Erase visible screen (2J) + the terminal's scrollback buffer (3J) + home the
+// cursor (H). Identical to ansi-escapes' `clearTerminal` on POSIX. We write this
+// through Ink's `useStdout().write`, which erases the live frame, emits our
+// escape, then restores the live frame — so the committed <Static> history
+// (banner + old conversation) is wiped from both the screen and the scrollback,
+// and never reprints (Static's cursor is already past it). The input prompt is
+// re-drawn at the top and new turns append fresh below.
+const CLEAR_TERMINAL = "\u001B[2J\u001B[3J\u001B[H";
 
 export function useAgentSession({
   model,
@@ -220,12 +186,19 @@ export function useAgentSession({
   const [totalUsage, setTotalUsage] = useState<UsageSummary | null>(null);
   const [systemNotice, setSystemNotice] = useState<SystemNotice | null>(null);
   const [permissionPrompt, setPermissionPrompt] = useState<PermissionPromptState | null>(null);
+  const [questionPrompt, setQuestionPrompt] = useState<UserQuestionRequest | null>(null);
   const [permissionSettings, setPermissionSettings] = useState<PermissionSettings | null>(null);
   const [currentModel, setCurrentModel] = useState(model);
   const [activePermissionMode, setActivePermissionMode] = useState<string>(permissionMode ?? "default");
   const [todos, setTodosState] = useState<TodoItem[]>([]);
   const [tasks, setTasksState] = useState<Task[]>([]);
   const [taskMode, setTaskModeState] = useState<TaskMode>(getTaskMode());
+  // Stage 24.1 — Ctrl+O transcript overlay. Mirrors Claude's
+  // `app:toggleTranscript`: the inline conversation stays condensed (one-line
+  // `⎿` summaries), and Ctrl+O opens a full-screen, scrollable, verbose
+  // transcript rebuilt from the message log — so any past tool call can be
+  // expanded retroactively without repainting the <Static> scrollback.
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   // Stage 20: live snapshot of the asyncAgentStore. The footer
   // BackgroundAgentBar component reads this to show running background
   // sub-agents (count + per-agent token / tool stats). We take a fresh
@@ -237,6 +210,9 @@ export function useAgentSession({
   );
 
   const permissionResolverRef = useRef<((decision: PermissionDecision) => void) | null>(null);
+  // Resolver for the in-flight AskUserQuestion call (mirrors the permission
+  // resolver). `null` answers means the user cancelled / declined.
+  const questionResolverRef = useRef<((response: UserQuestionResponse | null) => void) | null>(null);
   const pendingClearContextRef = useRef(false);
   const pendingFeedbackRef = useRef<string | null>(null);
   // Stage 20: refs that the notification auto-trigger subscriber reads
@@ -249,6 +225,13 @@ export function useAgentSession({
   const sessionRulesRef = useRef<PermissionRuleSet>({ allow: [], deny: [] });
   const engineRef = useRef<QueryEngine | null>(null);
   const sessionIdRef = useRef<string>(createSessionId());
+
+  // Ink's safe stdout writer (clears the live frame, writes, restores it).
+  // Mirrored into a ref because the engine-event consumer loop closes over an
+  // earlier render scope; the ref always points at the current writer.
+  const { write: writeStdout } = useStdout();
+  const writeStdoutRef = useRef(writeStdout);
+  writeStdoutRef.current = writeStdout;
 
   // Streaming-text throttling. SSE chunks can arrive at >100 Hz from fast
   // models, and every setStreamingText forces Ink to repaint the whole
@@ -287,6 +270,17 @@ export function useAgentSession({
       cwd: process.cwd(),
       get sessionId() {
         return sessionIdRef.current;
+      },
+      // AskUserQuestion bridge: surface the questions to the UI and return a
+      // promise resolved by `resolveQuestion` once the user picks (or null on
+      // cancel). Same shape as the permission-prompt bridge above. setState
+      // and the resolver ref are stable, so an empty dep array is safe.
+      requestUserQuestion: (request: UserQuestionRequest) => {
+        setSpinnerLabel("Waiting for your answer");
+        setQuestionPrompt(request);
+        return new Promise<UserQuestionResponse | null>((resolve) => {
+          questionResolverRef.current = resolve;
+        });
       },
     }),
     [],
@@ -359,6 +353,25 @@ export function useAgentSession({
             return rest;
           }
           return { ...tc, subAgentProgress: snapshot };
+        }),
+      );
+    });
+    return unsubscribe;
+  }, []);
+
+  // Mirror live Bash output (published by BashTool while a command runs)
+  // into the matching ToolCallInfo card — same id-keyed bridge as the
+  // sub-agent progress above. Lets long-running commands show their tail.
+  useEffect(() => {
+    const unsubscribe = subscribeBashProgress((toolUseId, snapshot) => {
+      setToolCalls((prev) =>
+        prev.map((tc) => {
+          if (tc.id !== toolUseId) return tc;
+          if (snapshot === null) {
+            const { bashProgress: _drop, ...rest } = tc;
+            return rest;
+          }
+          return { ...tc, bashProgress: snapshot };
         }),
       );
     });
@@ -512,6 +525,7 @@ export function useAgentSession({
               summary: request.summary,
               risk: request.risk,
               ruleHint: request.ruleHint,
+              input: request.input,
               isPlanExit,
               planContent,
               planFilePath,
@@ -556,6 +570,19 @@ export function useAgentSession({
       setSystemNotice({
         tone: "info",
         title: "Permission request cancelled",
+        body: "Use /exit, /quit, /bye, or Ctrl+D to exit.",
+      });
+      return true;
+    }
+
+    // An in-flight AskUserQuestion → cancel it (the tool gets a null answer).
+    if (questionResolverRef.current) {
+      questionResolverRef.current(null);
+      questionResolverRef.current = null;
+      setQuestionPrompt(null);
+      setSystemNotice({
+        tone: "info",
+        title: "Question cancelled",
         body: "Use /exit, /quit, /bye, or Ctrl+D to exit.",
       });
       return true;
@@ -623,6 +650,28 @@ export function useAgentSession({
     return true;
   }, []);
 
+  // Resolve the in-flight AskUserQuestion with the user's selections (or null
+  // to cancel). Mirrors resolvePermission — clears the dialog and hands the
+  // answers back to the awaiting tool call.
+  const resolveQuestion = useCallback((response: UserQuestionResponse | null): boolean => {
+    if (!questionResolverRef.current) return false;
+    questionResolverRef.current(response);
+    questionResolverRef.current = null;
+    setQuestionPrompt(null);
+    if (response === null) {
+      setSpinnerLabel("Thinking");
+    }
+    return true;
+  }, []);
+
+  // Ctrl+O — open/close the full-screen verbose transcript overlay.
+  const toggleTranscript = useCallback(() => {
+    setTranscriptOpen((v) => !v);
+  }, []);
+  const closeTranscript = useCallback(() => {
+    setTranscriptOpen(false);
+  }, []);
+
   const submit = useCallback(async (text: string): Promise<SubmitResult> => {
     const trimmed = text.trim();
     // Stage 20: empty text is valid when the auto-trigger
@@ -637,6 +686,37 @@ export function useAgentSession({
 
     if (trimmed === "/exit" || trimmed === "/quit" || trimmed === "/bye") {
       onExit();
+      return { handled: true };
+    }
+
+    // Bash mode (`!cmd`): run a shell command directly, bypassing the LLM —
+    // a quick local escape hatch. Output surfaces in a system notice (capped),
+    // and the command still honors the project's sandbox settings via BashTool.
+    if (trimmed.startsWith("!")) {
+      const command = trimmed.slice(1).trim();
+      if (!command) return { handled: true };
+      setSystemNotice({ tone: "info", title: `! ${command}`, body: "running…" });
+      try {
+        const result = await bashTool.call({ command }, { ...toolContext });
+        const raw = extractBashOutput(result.content) || "(no output)";
+        const lines = raw.split("\n");
+        const MAX = 40;
+        const body =
+          lines.length > MAX
+            ? [...lines.slice(0, MAX), `… +${lines.length - MAX} more lines`].join("\n")
+            : raw;
+        setSystemNotice({
+          tone: result.isError ? "error" : "info",
+          title: `! ${command}`,
+          body,
+        });
+      } catch (error) {
+        setSystemNotice({
+          tone: "error",
+          title: `! ${command}`,
+          body: error instanceof Error ? error.message : String(error),
+        });
+      }
       return { handled: true };
     }
 
@@ -774,6 +854,7 @@ export function useAgentSession({
               summary: value.request.summary,
               risk: value.request.risk,
               ruleHint: value.request.ruleHint,
+              input: value.request.input,
             });
             break;
           case "tool_use_done": {
@@ -796,6 +877,7 @@ export function useAgentSession({
                 displayName: isPlanFileWrite ? "Updated plan" : undefined,
                 displayHint: isPlanFileWrite ? "/plan to preview" : undefined,
                 inputPreview,
+                input: value.input,
                 errorMessage,
               }),
             );
@@ -836,6 +918,7 @@ export function useAgentSession({
             // entries too. ConversationView renders the historical Agent
             // card from the formatted tool_result text, not the store.
             clearAllSubAgentProgress();
+            clearAllBashProgress();
             await appendTranscriptEntry(toolContext.cwd, sessionIdRef.current, {
               type: "message",
               timestamp: new Date().toISOString(),
@@ -882,7 +965,11 @@ export function useAgentSession({
             });
             break;
           case "command":
-            setSystemNotice(buildCommandNotice(value.message, value.kind));
+            // Slash-command output is a blocking panel: it pins above the
+            // input, suppresses typing, and waits for Esc — matching Claude's
+            // local-jsx commands. (Skill / user prompt commands never reach
+            // here; they expand into a model turn, so they stay non-blocking.)
+            setSystemNotice({ ...buildCommandNotice(value.message, value.kind), dismissable: true });
             await appendTranscriptEntry(toolContext.cwd, sessionIdRef.current, {
               type: "system",
               timestamp: new Date().toISOString(),
@@ -935,6 +1022,14 @@ export function useAgentSession({
             setLastUsage(null);
             clearTodos(sessionIdRef.current);
             clearAllSubAgentProgress();
+            clearAllBashProgress();
+            clearUiNotices();
+            // Wipe the terminal so the previous conversation is gone from the
+            // screen and scrollback, matching the user's expectation that
+            // /clear starts from a blank slate. React state was just reset
+            // above, so the live frame Ink restores after the escape is the
+            // empty post-clear UI.
+            writeStdoutRef.current?.(CLEAR_TERMINAL);
             break;
           case "token_warning": {
             const w = value.warning;
@@ -1008,6 +1103,13 @@ export function useAgentSession({
       setIsLoading(false);
       permissionResolverRef.current = null;
       setPermissionPrompt(null);
+      // A question left hanging (loop aborted mid-ask) → resolve null so the
+      // awaiting tool call unblocks instead of leaking a promise.
+      if (questionResolverRef.current) {
+        questionResolverRef.current(null);
+        questionResolverRef.current = null;
+      }
+      setQuestionPrompt(null);
     }
 
     // After the loop completes, check if we need to clear context and re-submit
@@ -1063,14 +1165,20 @@ export function useAgentSession({
       totalUsage,
       systemNotice,
       permissionPrompt,
+      questionPrompt,
       permissionMode: activePermissionMode,
       currentModel,
       asyncAgents,
+      transcriptOpen,
     },
     actions: {
       submit,
       interrupt,
       resolvePermission,
+      resolveQuestion,
+      toggleTranscript,
+      closeTranscript,
+      dismissNotice: () => setSystemNotice(null),
     },
   };
 }

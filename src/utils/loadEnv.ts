@@ -45,6 +45,8 @@ export function loadEnv(): void {
   const settingsEnv = readJsonEnv(path.join(home, ".claude", "settings.json"));
   Object.assign(process.env, settingsEnv);
 
-  // 3. .env file (highest priority — project-local overrides everything)
-  dotenv.config({ override: true });
+  // 3. .env file (highest priority — project-local overrides everything).
+  // `quiet` suppresses dotenv's "injected env (N) from .env" tip banner so
+  // the REPL opens on a clean welcome card instead of a stray log line.
+  dotenv.config({ override: true, quiet: true });
 }
