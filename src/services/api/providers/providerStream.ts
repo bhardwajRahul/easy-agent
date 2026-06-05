@@ -76,7 +76,13 @@ interface PreparedRequest {
 // upstream rejects the follow-up turn with a 400. We therefore rebuild the
 // OpenAI request messages directly from the (correct) universal IR.
 
-/** Flatten a tool result (string | content-block array | object) to text. */
+/**
+ * Flatten a tool result (string | content-block array | object) to text.
+ * Image blocks collapse to a `[image]` marker: neither the OpenAI `tool`
+ * role nor the Gemini `functionResponse` part can carry image bytes, so a
+ * tool that returns an image degrades gracefully on those providers (the
+ * Anthropic path keeps the real image — see the native pass-through).
+ */
 function resultToString(result: unknown): string {
   if (result == null) return "";
   if (typeof result === "string") return result;
@@ -84,14 +90,26 @@ function resultToString(result: unknown): string {
     return result
       .map((part) => {
         if (typeof part === "string") return part;
-        if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
-          return (part as { text: string }).text;
+        if (part && typeof part === "object") {
+          const obj = part as { type?: string; text?: unknown };
+          if (typeof obj.text === "string") return obj.text;
+          if (obj.type === "image") return "[image]";
         }
         return JSON.stringify(part);
       })
       .join("\n");
   }
   return JSON.stringify(result);
+}
+
+/** Build a data: URL (or pass an http URL through) from universal media. */
+function mediaToImageUrl(media: { url?: string; data?: string; mimeType?: string } | undefined): string | null {
+  if (!media) return null;
+  if (typeof media.url === "string" && media.url.length > 0) return media.url;
+  if (typeof media.data === "string" && media.data.length > 0) {
+    return `data:${media.mimeType ?? "image/png"};base64,${media.data}`;
+  }
+  return null;
 }
 
 function systemText(system: UniversalBody["system"]): string {
@@ -104,9 +122,12 @@ interface OpenAIChatToolCall {
   type: "function";
   function: { name: string; arguments: string };
 }
+type OpenAIChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
 interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | null | OpenAIChatContentPart[];
   tool_call_id?: string;
   tool_calls?: OpenAIChatToolCall[];
 }
@@ -119,11 +140,15 @@ function universalToOpenAIChatMessages(universal: UniversalBody): OpenAIChatMess
 
   for (const msg of universal.messages) {
     let text = "";
+    const imageUrls: string[] = [];
     const toolCalls: OpenAIChatToolCall[] = [];
     const toolResults: Array<{ id: string; content: string }> = [];
     for (const part of msg.content ?? []) {
       if (part.type === "text" && typeof part.text === "string") {
         text += part.text;
+      } else if (part.type === "image") {
+        const url = mediaToImageUrl(part.media);
+        if (url) imageUrls.push(url);
       } else if (part.type === "tool_call" && part.tool_call) {
         toolCalls.push({
           id: part.tool_call.id,
@@ -139,12 +164,13 @@ function universalToOpenAIChatMessages(universal: UniversalBody): OpenAIChatMess
           content: resultToString(part.tool_result.result),
         });
       }
-      // thinking / media parts are intentionally dropped from OpenAI history.
+      // thinking parts are intentionally dropped from OpenAI history.
     }
 
     if (msg.role === "system") {
       if (text) out.push({ role: "system", content: text });
     } else if (msg.role === "assistant") {
+      // Assistants never emit images in this pipeline; keep text-only.
       const m: OpenAIChatMessage = {
         role: "assistant",
         content: toolCalls.length > 0 ? (text || null) : text,
@@ -157,14 +183,25 @@ function universalToOpenAIChatMessages(universal: UniversalBody): OpenAIChatMess
       for (const tr of toolResults) {
         out.push({ role: "tool", tool_call_id: tr.id, content: tr.content });
       }
-      if (text) out.push({ role: "user", content: text });
+      // Images ride along in the user turn as `image_url` content parts.
+      if (imageUrls.length > 0) {
+        const parts: OpenAIChatContentPart[] = [];
+        if (text) parts.push({ type: "text", text });
+        for (const url of imageUrls) parts.push({ type: "image_url", image_url: { url } });
+        out.push({ role: "user", content: parts });
+      } else if (text) {
+        out.push({ role: "user", content: text });
+      }
     }
   }
   return out;
 }
 
+type ResponsesContentPart =
+  | { type: "input_text"; text: string }
+  | { type: "input_image"; image_url: string };
 type ResponsesItem =
-  | { role: "system" | "user" | "assistant"; content: string }
+  | { role: "system" | "user" | "assistant"; content: string | ResponsesContentPart[] }
   | { type: "function_call"; call_id: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string };
 
@@ -176,11 +213,15 @@ function universalToOpenAIResponsesInput(universal: UniversalBody): ResponsesIte
 
   for (const msg of universal.messages) {
     let text = "";
+    const imageUrls: string[] = [];
     const fnCalls: ResponsesItem[] = [];
     const fnOutputs: ResponsesItem[] = [];
     for (const part of msg.content ?? []) {
       if (part.type === "text" && typeof part.text === "string") {
         text += part.text;
+      } else if (part.type === "image") {
+        const url = mediaToImageUrl(part.media);
+        if (url) imageUrls.push(url);
       } else if (part.type === "tool_call" && part.tool_call) {
         fnCalls.push({
           type: "function_call",
@@ -205,7 +246,14 @@ function universalToOpenAIResponsesInput(universal: UniversalBody): ResponsesIte
       for (const c of fnCalls) out.push(c);
     } else {
       for (const o of fnOutputs) out.push(o);
-      if (text) out.push({ role: "user", content: text });
+      if (imageUrls.length > 0) {
+        const parts: ResponsesContentPart[] = [];
+        if (text) parts.push({ type: "input_text", text });
+        for (const url of imageUrls) parts.push({ type: "input_image", image_url: url });
+        out.push({ role: "user", content: parts });
+      } else if (text) {
+        out.push({ role: "user", content: text });
+      }
     }
   }
   return out;
@@ -230,6 +278,7 @@ interface GeminiFunctionCall {
 }
 interface GeminiPart {
   text?: string;
+  inlineData?: { mimeType: string; data: string };
   functionCall?: GeminiFunctionCall;
   functionResponse?: { name: string; id?: string; response: { output: string } };
   thoughtSignature?: string;
@@ -262,9 +311,17 @@ function buildGeminiContents(messages: StreamRequestParams["messages"]): GeminiC
           thoughtSignature?: string;
           tool_use_id?: string;
           content?: unknown;
+          source?: { type?: string; media_type?: string; data?: string; url?: string };
         };
         if (block.type === "text") {
           if (typeof block.text === "string" && block.text.length > 0) parts.push({ text: block.text });
+        } else if (block.type === "image") {
+          // Gemini takes inline base64 bytes. URL-sourced images are not
+          // inlined here (our local image paths always produce base64).
+          const src = block.source;
+          if (src && src.type === "base64" && typeof src.data === "string" && src.data.length > 0) {
+            parts.push({ inlineData: { mimeType: src.media_type ?? "image/png", data: src.data } });
+          }
         } else if (block.type === "tool_use" && typeof block.name === "string") {
           if (block.id) idToName.set(block.id, block.name);
           const part: GeminiPart = {

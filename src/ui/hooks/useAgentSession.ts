@@ -20,10 +20,11 @@ import {
   type PermissionRuleSet,
   type PermissionSettings,
 } from "../../permissions/permissions.js";
-import type {
-  ToolContext,
-  UserQuestionRequest,
-  UserQuestionResponse,
+import {
+  toolResultText,
+  type ToolContext,
+  type UserQuestionRequest,
+  type UserQuestionResponse,
 } from "../../tools/Tool.js";
 import { readPlan, getPlanFilePath, getPlansDirectory } from "../../context/plans.js";
 import type {
@@ -722,7 +723,7 @@ export function useAgentSession({
       setSystemNotice({ tone: "info", title: `! ${command}`, body: "running…" });
       try {
         const result = await bashTool.call({ command }, { ...toolContext });
-        const raw = extractBashOutput(result.content) || "(no output)";
+        const raw = extractBashOutput(toolResultText(result.content)) || "(no output)";
         const lines = raw.split("\n");
         const MAX = 40;
         const body =
@@ -886,21 +887,22 @@ export function useAgentSession({
             });
             break;
           case "tool_use_done": {
+            const resultText = toolResultText(value.result.content);
             const isPlanFileWrite =
               (value.name === "Write" || value.name === "Edit") &&
-              value.result.content.includes(getPlansDirectory());
+              resultText.includes(getPlansDirectory());
             const inputPreview = formatToolInputPreview(value.input);
             // Strip the model-only <sandbox_violations> tag from the
             // user-visible error message. The tag stays in the tool
             // result that goes back to the model (so it can interpret
             // sandbox denials), but humans see clean stderr only.
-            const rawErrorMessage = value.result.isError ? value.result.content : undefined;
+            const rawErrorMessage = value.result.isError ? resultText : undefined;
             const errorMessage = rawErrorMessage
               ? removeSandboxViolationTags(rawErrorMessage)
               : undefined;
             setToolCalls((prev) =>
               markToolCallComplete(prev, value.id, {
-                resultLength: value.result.content.length,
+                resultLength: resultText.length,
                 isError: value.result.isError,
                 displayName: isPlanFileWrite ? "Updated plan" : undefined,
                 displayHint: isPlanFileWrite ? "/plan to preview" : undefined,
@@ -914,7 +916,7 @@ export function useAgentSession({
               timestamp: new Date().toISOString(),
               name: value.name,
               phase: "done",
-              resultLength: value.result.content.length,
+              resultLength: resultText.length,
               isError: value.result.isError,
             });
             break;
@@ -1010,6 +1012,12 @@ export function useAgentSession({
               level: value.kind,
               message: value.message,
             });
+            break;
+          case "notice":
+            // Transient, non-blocking feedback (e.g. image attached). Unlike a
+            // `command` panel it has no `dismissable` flag, so it never hides
+            // the input — it just shows above it and is replaced by the next.
+            setSystemNotice({ tone: value.tone, title: value.title, body: value.body });
             break;
           case "compacted": {
             const compactTitle = value.trigger === "micro"
@@ -1240,6 +1248,7 @@ export function useAgentSession({
       toggleTranscript,
       closeTranscript,
       dismissNotice: () => setSystemNotice(null),
+      showNotice: (notice: SystemNotice) => setSystemNotice(notice),
     },
   };
 }

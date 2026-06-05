@@ -5,6 +5,7 @@
 import * as fs from "node:fs/promises";
 import type { Tool, ToolContext, ToolResult } from "./Tool.js";
 import { resolveWorkspacePath } from "./pathUtils.js";
+import { isImagePath, readImageAsBlock } from "./imageUtils.js";
 
 interface FileReadInput {
   file_path: string;
@@ -70,6 +71,22 @@ export const fileReadTool: Tool = {
       if (stat.isDirectory()) {
         const entries = await fs.readdir(resolvedPath);
         return { content: `Directory listing for ${input.file_path}:\n${entries.join("\n")}` };
+      }
+
+      // Images come back as a real image block so the model can see them,
+      // prefixed with a short text note for context. Non-image binaries fall
+      // through to the UTF-8 text path below.
+      if (isImagePath(resolvedPath)) {
+        const img = await readImageAsBlock(resolvedPath);
+        if (!img.ok) {
+          return { content: `Error: ${img.error}`, isError: true };
+        }
+        return {
+          content: [
+            { type: "text", text: `Read image ${input.file_path} (${img.mediaType}, ${img.bytes} bytes)` },
+            img.block,
+          ],
+        };
       }
 
       const raw = await fs.readFile(resolvedPath, "utf-8");

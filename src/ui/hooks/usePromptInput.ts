@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useInput } from "ink";
+import { useInput, usePaste } from "ink";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import type { PermissionDecision, PermissionMode } from "../../permissions/permissions.js";
 import type { TaskMode } from "../../state/taskModeStore.js";
 import type { CommandSuggestion, FileSuggestion } from "../types.js";
+import { rm } from "node:fs/promises";
 import { useTextInput } from "./useTextInput.js";
+import { readClipboardImage } from "../utils/screenshotClipboard.js";
+import { parsePastedImagePath, readImageAsBlock } from "../../tools/imageUtils.js";
+import { addPastedImage, imageRefToken } from "../../core/pastedImages.js";
+import type { ImageBlock } from "../../types/message.js";
 
 export interface ModeSuggestion {
   key: string;
@@ -56,6 +61,8 @@ interface UsePromptInputOptions {
   onPermissionDecision: (decision: PermissionDecision) => boolean;
   /** Ctrl+O — open the full-screen verbose transcript overlay. */
   onToggleTranscript: () => void;
+  /** Surface a transient notice (e.g. clipboard-image paste result). */
+  onNotice?: (notice: { tone: "info" | "error"; title: string; body: string }) => void;
 }
 
 const BUILTIN_COMMANDS: CommandSuggestion[] = [
@@ -178,6 +185,7 @@ export function usePromptInput({
   onInterrupt,
   onPermissionDecision,
   onToggleTranscript,
+  onNotice,
 }: UsePromptInputOptions) {
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(-1);
   const [selectedModeIndex, setSelectedModeIndex] = useState(-1);
@@ -197,6 +205,8 @@ export function usePromptInput({
   // the real content is stashed here and spliced back in at submit time.
   const pasteMapRef = useRef<Map<number, string>>(new Map());
   const pasteCounterRef = useRef(0);
+  // Guards against re-entrant clipboard reads while one is still in flight.
+  const clipboardBusyRef = useRef(false);
 
   const expandPastes = useCallback((text: string): string => {
     if (pasteMapRef.current.size === 0) return text;
@@ -315,6 +325,125 @@ export function usePromptInput({
     [onPermissionDecision],
   );
 
+  // Splice text in at the current caret, mirroring what the user sees. Reads
+  // the *current* render's inputValue/cursorPos, so it must be called from an
+  // event handler that runs synchronously after render (useInput / usePaste).
+  const insertAtCursor = (text: string) => {
+    spliceTokenInto(cursorPos, inputValue, text);
+  };
+
+  // Splice `token` into a captured `snapshot` at offset `at`. Used by the async
+  // image paths (clipboard read / file read) where the live input value isn't
+  // reachable from the resolved closure — we capture at insert-request time.
+  const spliceTokenInto = (at: number, snapshot: string, token: string) => {
+    const before = snapshot.slice(0, at);
+    const after = snapshot.slice(at);
+    textInput.setValueAndCursor(before + token + after, before.length + token.length);
+  };
+
+  // Stash a decoded image in the in-memory registry and drop a compact
+  // `[Image #N]` chip into the editor — never a raw temp path. The bytes are
+  // expanded into a real image block at submit time. Matches Claude Code's
+  // pasted-image model and avoids the workspace allowed-roots check entirely.
+  const attachImageBlock = (
+    img: { block: ImageBlock; mediaType: string; bytes: number },
+    at: number,
+    snapshot: string,
+    filename: string,
+  ) => {
+    const id = addPastedImage({ block: img.block, mediaType: img.mediaType, bytes: img.bytes, filename });
+    spliceTokenInto(at, snapshot, `${imageRefToken(id)} `);
+    onNotice?.({ tone: "info", title: "Image", body: `${filename} attached — press Enter to send.` });
+  };
+
+  // Read an image *file* (pasted path) into the registry and chip it in.
+  const attachImageFromPath = (absPath: string, at: number, snapshot: string) => {
+    void readImageAsBlock(absPath)
+      .then((img) => {
+        if (img.ok) {
+          attachImageBlock(img, at, snapshot, path.basename(absPath));
+        } else {
+          onNotice?.({ tone: "error", title: "Image", body: img.error });
+        }
+      })
+      .catch((err: unknown) => {
+        onNotice?.({ tone: "error", title: "Image", body: err instanceof Error ? err.message : String(err) });
+      });
+  };
+
+  // Pull an image off the system clipboard into the registry and chip it in.
+  // Guarded against re-entrancy because the clipboard read is async
+  // (osascript / pngpaste). The temp file is read then deleted — the bytes
+  // live only in memory, so nothing leaks an unreadable path into the prompt.
+  const grabClipboardImage = (at: number, snapshot: string) => {
+    if (clipboardBusyRef.current) return;
+    clipboardBusyRef.current = true;
+    onNotice?.({ tone: "info", title: "Clipboard", body: "Reading image from clipboard…" });
+    void readClipboardImage()
+      .then(async (res) => {
+        if (!res.ok) {
+          onNotice?.({ tone: "error", title: "Clipboard", body: res.error });
+          return;
+        }
+        const img = await readImageAsBlock(res.path);
+        void rm(res.path, { force: true }).catch(() => {});
+        if (img.ok) {
+          attachImageBlock(img, at, snapshot, "Pasted image");
+        } else {
+          onNotice?.({ tone: "error", title: "Clipboard", body: img.error });
+        }
+      })
+      .catch((err: unknown) => {
+        onNotice?.({
+          tone: "error",
+          title: "Clipboard",
+          body: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .finally(() => {
+        clipboardBusyRef.current = false;
+      });
+  };
+
+  // Bracketed-paste channel (Ink enables `\x1b[?2004h` while this is active).
+  // This is the path that makes Cmd+V work on macOS: the terminal owns Cmd+V
+  // and never lets it reach useInput, but it *does* forward the paste here.
+  // Crucially, pasting a clipboard *image* with Cmd+V yields an EMPTY bracketed
+  // paste (the terminal can't serialize the bitmap as text), which we treat as
+  // "go read the image off the clipboard" — exactly how Claude Code does it.
+  usePaste((text: string) => {
+    // Overlays own the keyboard; don't leak pastes into the hidden buffer.
+    if (hasCommandPanel || hasTranscript || hasPermissionPrompt || hasQuestionPrompt) {
+      return;
+    }
+
+    // Empty paste = Cmd+V of a clipboard image (macOS). Grab it from the OS.
+    if (text.length === 0) {
+      if (process.platform === "darwin") grabClipboardImage(cursorPos, inputValue);
+      return;
+    }
+
+    // Pasted an image *file* path (e.g. copied from Finder) → read it into the
+    // registry and drop an `[Image #N]` chip (not the raw path).
+    const imgPath = parsePastedImagePath(text);
+    if (imgPath) {
+      attachImageFromPath(imgPath, cursorPos, inputValue);
+      return;
+    }
+
+    // Large paste → reference placeholder; real text is spliced back at submit.
+    if (isLargePaste(text)) {
+      const lineCount = text.split("\n").length;
+      const id = ++pasteCounterRef.current;
+      pasteMapRef.current.set(id, text);
+      insertAtCursor(`[Pasted text #${id} +${lineCount} lines]`);
+      return;
+    }
+
+    // Ordinary paste → insert verbatim at the caret.
+    insertAtCursor(text);
+  });
+
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       onInterrupt();
@@ -353,6 +482,16 @@ export function usePromptInput({
     // Ctrl+O as input "o" with the ctrl modifier; \x0f is the raw fallback.
     if ((key.ctrl && input === "o") || input === "\x0f") {
       onToggleTranscript();
+      return;
+    }
+
+    // Ctrl+V grabs a clipboard *image* explicitly. This is the cross-terminal
+    // fallback: Cmd+V is preferred (handled by the bracketed-paste channel
+    // above), but terminals that don't forward Cmd+V — or users on a keyboard
+    // without it — get the same behavior here. Ink delivers Ctrl+V as "v"+ctrl
+    // or the raw \x16 byte.
+    if ((key.ctrl && input === "v") || input === "\x16") {
+      grabClipboardImage(cursorPos, inputValue);
       return;
     }
 
@@ -414,6 +553,19 @@ export function usePromptInput({
         }
       }
       return;
+    }
+
+    // Pasted image path → `@path` token. On macOS, Cmd+V is handled by the
+    // terminal as "paste"; copying an image *file* (Finder) then Cmd+V pastes
+    // its path here. We convert a lone existing image path into an attachment
+    // reference so it rides the same pipeline as a typed `@image.png`. A paste
+    // arrives as a multi-char `input` chunk (not a single keystroke).
+    if (input && input.length > 1 && !key.ctrl && !key.meta) {
+      const imgPath = parsePastedImagePath(input);
+      if (imgPath) {
+        attachImageFromPath(imgPath, cursorPos, inputValue);
+        return;
+      }
     }
 
     // Large paste → reference placeholder (works whether or not a turn runs).

@@ -31,6 +31,7 @@ import * as fs from "node:fs/promises";
 import * as fssync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { toolResultText } from "../tools/Tool.js";
 
 let failures = 0;
 function assert(cond: boolean, msg: string): void {
@@ -417,10 +418,10 @@ async function main(): Promise<void> {
     const toolCtx = { cwd: t9 } as unknown as Parameters<typeof grepTool.call>[1];
     await writeJson(userFile, {}); // respect ignore (default)
     const r1 = await grepTool.call({ pattern: "NEEDLE-IN-IGNORED" }, toolCtx);
-    assert(/No matches/.test(r1.content), "default respects .ignore — ignored file is skipped");
+    assert(/No matches/.test(toolResultText(r1.content)), "default respects .ignore — ignored file is skipped");
     await writeJson(userFile, { respectGitignore: false });
     const r2 = await grepTool.call({ pattern: "NEEDLE-IN-IGNORED" }, toolCtx);
-    assert(/secret\.txt/.test(r2.content), "respectGitignore:false searches ignored files (--no-ignore)");
+    assert(/secret\.txt/.test(toolResultText(r2.content)), "respectGitignore:false searches ignored files (--no-ignore)");
     await writeJson(userFile, {});
   } else {
     console.log("  · rg not available — skipping functional respectGitignore check");

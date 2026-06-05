@@ -8,6 +8,7 @@
  */
 
 import { bashTool } from "../tools/bashTool.js";
+import { toolResultText } from "../tools/Tool.js";
 import {
   subscribeBashProgress,
   type BashProgress,
@@ -39,7 +40,7 @@ async function main(): Promise<void> {
     ["final snapshot is done", last?.done === true],
     ["final tail contains last line", (last?.output ?? "").includes("line5")],
     ["tool result succeeded", result.isError !== true],
-    ["tool result has all output", result.content.includes("line5")],
+    ["tool result has all output", toolResultText(result.content).includes("line5")],
   ];
 
   let ok = true;

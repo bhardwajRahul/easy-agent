@@ -70,7 +70,7 @@ import { loadAllCustomAgents } from "../agents/loadAgentsDir.js";
 import { setAgents } from "../agents/registry.js";
 import { getBuiltInAgents } from "../agents/builtIn/index.js";
 import type { AgentDefinition } from "../agents/types.js";
-import type { ToolContext } from "../tools/Tool.js";
+import { toolResultText, type ToolContext } from "../tools/Tool.js";
 import type { AgentRunResult } from "../agents/types.js";
 import type {
   PermissionDecision,
@@ -522,11 +522,13 @@ async function main(): Promise<void> {
 
       assert(result.isError !== true, "async + worktree call returns successfully");
       assert(
-        result.content.includes("async_launched") && result.content.includes("agent_id"),
+        toolResultText(result.content).includes("async_launched") &&
+          toolResultText(result.content).includes("agent_id"),
         "async response payload includes async_launched + agent_id",
       );
       assert(
-        result.content.includes("worktree:") || result.content.includes("worktree_path"),
+        toolResultText(result.content).includes("worktree:") ||
+          toolResultText(result.content).includes("worktree_path"),
         "async response surfaces the created worktree path",
       );
 
@@ -599,11 +601,11 @@ async function main(): Promise<void> {
       assert(all[0]?.agentType === "Explore", "registered agent type matches");
       assert(all[0]?.status === "running", "registered agent is in 'running' state");
       assert(
-        result.content.includes(all[0]!.agentId),
+        toolResultText(result.content).includes(all[0]!.agentId),
         "tool result references the same agentId stored in the registry",
       );
       assert(
-        result.content.includes(all[0]!.outputFile),
+        toolResultText(result.content).includes(all[0]!.outputFile),
         "tool result references the outputFile path",
       );
 
@@ -922,7 +924,7 @@ Bad iso value should be silently dropped.`,
         "parent's onPermissionRequest was NOT invoked during background launch",
       );
 
-      const m = result.content.match(/<agent_id>([^<]+)<\/agent_id>/);
+      const m = toolResultText(result.content).match(/<agent_id>([^<]+)<\/agent_id>/);
       const launchedAgentId = m?.[1];
       assert(typeof launchedAgentId === "string", "async_launched response carried an agent_id");
       if (launchedAgentId) {

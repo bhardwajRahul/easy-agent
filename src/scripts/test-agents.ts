@@ -36,6 +36,7 @@ import {
 } from "../agents/resolveAgentTools.js";
 import { formatAgentsSystemReminder } from "../agents/promptInjection.js";
 import { agentTool } from "../tools/agentTool.js";
+import { toolResultText } from "../tools/Tool.js";
 import { getAllTools } from "../tools/index.js";
 import { checkPermission } from "../permissions/permissions.js";
 import {
@@ -276,7 +277,7 @@ async function main(): Promise<void> {
     const missingPrompt = await agentTool.call({}, cwdContext);
     assert(missingPrompt.isError, "missing prompt is an error");
     assert(
-      missingPrompt.content.includes("'prompt' is required"),
+      toolResultText(missingPrompt.content).includes("'prompt' is required"),
       "error message mentions 'prompt' required",
     );
 
@@ -286,11 +287,11 @@ async function main(): Promise<void> {
     );
     assert(unknownAgent.isError, "unknown agent type is an error");
     assert(
-      unknownAgent.content.includes("'does-not-exist'"),
+      toolResultText(unknownAgent.content).includes("'does-not-exist'"),
       "error message names the bad agent type",
     );
     assert(
-      unknownAgent.content.includes("Available types"),
+      toolResultText(unknownAgent.content).includes("Available types"),
       "error lists available agent types",
     );
 

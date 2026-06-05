@@ -18,6 +18,7 @@ import type { QuerySource } from "../services/api/withRetry.js";
 import { compactMessages } from "../context/compaction.js";
 import { findToolByName } from "../tools/index.js";
 import { truncateToolResult, type ToolContext, type ToolResult } from "../tools/Tool.js";
+import { appendTextToContent, prependTextToContent } from "../tools/contentBlocks.js";
 import {
   activateConditionalSkillsForPaths,
   extractToolFilePaths,
@@ -485,15 +486,18 @@ async function runOneToolBlock(
       const sep = "\n\n[PostToolUse hook]\n";
       result = {
         ...result,
-        content: result.content + sep + postOutcome.additionalContext,
+        content: appendTextToContent(result.content, sep + postOutcome.additionalContext),
       };
     }
     if (postOutcome.blockingError) {
+      const blocked = `[PostToolUse hook blocked]\n${postOutcome.blockingError}`;
       result = {
         ...result,
-        content:
-          (result.isError ? result.content + "\n\n" : "") +
-          `[PostToolUse hook blocked]\n${postOutcome.blockingError}`,
+        // On an already-errored result we append the block reason; on a
+        // previously-successful result the block reason replaces the output.
+        content: result.isError
+          ? appendTextToContent(result.content, `\n\n${blocked}`)
+          : blocked,
         isError: true,
       };
     }
@@ -509,7 +513,7 @@ async function runOneToolBlock(
       const sep = "\n\n[PreToolUse hook]\n";
       result = {
         ...result,
-        content: preOutcome.additionalContext + sep + result.content,
+        content: prependTextToContent(result.content, preOutcome.additionalContext + sep),
       };
     }
 

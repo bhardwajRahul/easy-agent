@@ -76,7 +76,7 @@ import { teamDeleteTool } from "../tools/teamDeleteTool.js";
 import { sendMessageTool } from "../tools/sendMessageTool.js";
 import { agentTool } from "../tools/agentTool.js";
 import { formatTeamSystemReminder } from "../agents/teamPromptInjection.js";
-import type { ToolContext } from "../tools/Tool.js";
+import { toolResultText, type ToolContext } from "../tools/Tool.js";
 import { setAgents } from "../agents/registry.js";
 import { getBuiltInAgents } from "../agents/builtIn/index.js";
 import {
@@ -444,7 +444,7 @@ async function main(): Promise<void> {
       const dup = await teamCreateTool.call({ team_name: "other" }, ctx);
       assert(dup.isError === true, "second TeamCreate refused");
       assert(
-        dup.content.includes("already leading"),
+        toolResultText(dup.content).includes("already leading"),
         "refusal mentions current team",
       );
 
@@ -461,7 +461,7 @@ async function main(): Promise<void> {
       const preExist = await teamCreateTool.call({ team_name: "preset" }, ctx2);
       assert(preExist.isError === true, "TeamCreate refuses pre-existing on-disk team");
       assert(
-        preExist.content.includes("already exists on disk"),
+        toolResultText(preExist.content).includes("already exists on disk"),
         "refusal message mentions on-disk file",
       );
       await cleanupTeamDirectory("preset");
@@ -512,7 +512,7 @@ async function main(): Promise<void> {
       );
       assert(unknown.isError === true, "SendMessage to unknown name fails");
       assert(
-        unknown.content.includes("Known members"),
+        toolResultText(unknown.content).includes("Known members"),
         "error lists known members",
       );
 
@@ -600,7 +600,7 @@ async function main(): Promise<void> {
       const refused = await teamDeleteTool.call({}, ctx);
       assert(refused.isError === true, "TeamDelete refused while teammate active");
       assert(
-        refused.content.includes("worker"),
+        toolResultText(refused.content).includes("worker"),
         "refusal lists the offending teammate",
       );
       assert(
@@ -647,7 +647,7 @@ async function main(): Promise<void> {
       );
       assert(out.isError === true, "AgentTool refuses name when flag off");
       assert(
-        out.content.includes("not enabled"),
+        toolResultText(out.content).includes("not enabled"),
         "error mentions feature is not enabled",
       );
     });

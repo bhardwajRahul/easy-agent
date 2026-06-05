@@ -114,6 +114,14 @@ function microCompactMessage(message: MessageParam): { message: MessageParam; co
 
   const compactedToolIds: string[] = [];
   const nextContent = message.content.map((block) => {
+    // Historical images (e.g. a screenshot the user pasted, or an old Read
+    // of an image) are heavy. Outside the recent-message window we collapse
+    // them to a `[image]` text marker so the conversation stays coherent
+    // without re-sending the bytes every turn.
+    if (block.type === "image") {
+      return { type: "text" as const, text: "[image]" };
+    }
+
     if (block.type !== "tool_result") {
       return block;
     }

@@ -232,8 +232,11 @@ export function buildToolResultMap(messages: MessageParam[]): Map<string, ToolRe
         text = block.content;
       } else if (Array.isArray(block.content)) {
         text = (block.content as Array<{ type?: string; text?: string }>)
-          .filter((b) => b?.type === "text" && typeof b.text === "string")
-          .map((b) => b.text as string)
+          .map((b) => {
+            if (b?.type === "text" && typeof b.text === "string") return b.text;
+            if (b?.type === "image") return "[image]";
+            return "";
+          })
           .join("");
       }
       map.set(block.tool_use_id, { content: text, isError: block.is_error === true });
@@ -535,8 +538,33 @@ export function flattenConversation(
         }
         items.push({ key: `u${index}`, element: renderUserBubble(message.content) });
         lastVisibleKind = "user";
+      } else if (Array.isArray(message.content)) {
+        // A user array is either tool_result blocks (surfaced via their
+        // tool_use item) or an image-attachment turn (text + image blocks).
+        const blocks = message.content as Array<{ type?: string; text?: string }>;
+        const hasToolResult = blocks.some((b) => b?.type === "tool_result");
+        if (!hasToolResult) {
+          const text = blocks
+            .filter((b) => b?.type === "text" && typeof b.text === "string")
+            .map((b) => b.text as string)
+            .join("");
+          const imageCount = blocks.filter((b) => b?.type === "image").length;
+          if (text || imageCount > 0) {
+            const suffix = imageCount > 0 ? `  [图片 ×${imageCount}]` : "";
+            items.push({
+              key: `u${index}`,
+              element: (
+                <UserMessageBar
+                  caret={glyph.userCaret}
+                  text={`${text}${suffix}`}
+                  textColor={theme.userBarText}
+                />
+              ),
+            });
+            lastVisibleKind = "user";
+          }
+        }
       }
-      // Array content = tool_result blocks — surfaced via their tool_use item.
       return;
     }
 

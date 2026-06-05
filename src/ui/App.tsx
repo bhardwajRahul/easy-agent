@@ -131,6 +131,7 @@ export function App({ model, permissionMode, shouldResume, resumeSessionId }: Ap
     onInterrupt: actions.interrupt,
     onPermissionDecision: actions.resolvePermission,
     onToggleTranscript: actions.toggleTranscript,
+    onNotice: actions.showNotice,
   });
 
   // Status line (stage 24.5): context fed to an optional user-configured

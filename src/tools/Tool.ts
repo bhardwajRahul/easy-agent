@@ -12,6 +12,7 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
+import type { ContentBlock } from "../types/message.js";
 
 // ─── Interactive questions (AskUserQuestion) ───────────────────────
 
@@ -133,8 +134,14 @@ export interface ToolContext {
 
 /** The return value of a tool's `call()` method. */
 export interface ToolResult {
-  /** Human-readable text output sent back to the model. */
-  content: string;
+  /**
+   * Output sent back to the model. Usually a plain string, but tools that
+   * produce multimodal output (e.g. `Read` on an image, MCP image results)
+   * return an array of content blocks — text and/or image blocks — which is
+   * forwarded verbatim into the `tool_result` block. The array form is what
+   * lets the model actually *see* an image.
+   */
+  content: string | ContentBlock[];
   /** Whether this call produced an error. */
   isError?: boolean;
 }
@@ -201,11 +208,40 @@ export interface Tool {
 }
 
 /** Truncate tool result content to the specified max size. */
-export function truncateToolResult(content: string, maxChars?: number): string {
+export function truncateToolResult(
+  content: string | ContentBlock[],
+  maxChars?: number,
+): string | ContentBlock[] {
   const limit = maxChars ?? DEFAULT_MAX_RESULT_SIZE_CHARS;
+  // Array content (multimodal results): only truncate text blocks; never
+  // touch image blocks — slicing base64 would corrupt the image and the
+  // byte budget for images is handled separately (size guard in the tool).
+  if (Array.isArray(content)) {
+    return content.map((block) =>
+      block.type === "text"
+        ? { ...block, text: truncateToolResult(block.text, maxChars) as string }
+        : block,
+    );
+  }
   if (content.length <= limit) return content;
   const truncated = content.slice(0, limit);
   return `${truncated}\n\n[Output truncated: ${content.length} chars total, showing first ${limit}]`;
+}
+
+/**
+ * Flatten a tool result's content to a plain string for UI summaries,
+ * logging, persistence, and any consumer that only deals in text. Image
+ * blocks collapse to a `[image]` marker.
+ */
+export function toolResultText(content: string | ContentBlock[]): string {
+  if (typeof content === "string") return content;
+  return content
+    .map((block) => {
+      if (block.type === "text") return block.text;
+      if (block.type === "image") return "[image]";
+      return "";
+    })
+    .join("");
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { fileEditTool } from "../tools/fileEditTool.js";
+import { toolResultText } from "../tools/Tool.js";
 import { multiEditTool } from "../tools/multiEditTool.js";
 import { applyEditsToContent, EditError } from "../tools/editCore.js";
 import { webFetchTool } from "../tools/webFetchTool.js";
@@ -93,7 +94,7 @@ async function main(): Promise<void> {
       { cwd },
     );
     assert(!all.isError && (await fs.readFile(file, "utf-8")) === "bar bar bar", "Edit replace_all replaces every occurrence");
-    assert(all.content.includes("3 occurrences"), "Edit replace_all reports the count");
+    assert(toolResultText(all.content).includes("3 occurrences"), "Edit replace_all reports the count");
   });
   await withTempFile("alpha beta", async (file, cwd) => {
     const one = await fileEditTool.call({ file_path: file, old_string: "alpha", new_string: "ALPHA" }, { cwd });
@@ -137,7 +138,7 @@ async function main(): Promise<void> {
     );
     const after = await fs.readFile(file, "utf-8");
     assert(fail.isError === true && after === "keep me\n", "MultiEdit is atomic: a failing edit writes nothing");
-    assert(fail.content.includes("edit #2"), "MultiEdit names the failing edit index");
+    assert(toolResultText(fail.content).includes("edit #2"), "MultiEdit names the failing edit index");
   });
   {
     let threw = false;
@@ -303,9 +304,9 @@ async function main(): Promise<void> {
 
   console.log("\n[9] MCP resource tools with no connected servers");
   const list = await listMcpResourcesTool.call({}, ctx);
-  assert(!list.isError && list.content.includes("No MCP resources"), "ListMcpResources: friendly message when no servers");
+  assert(!list.isError && toolResultText(list.content).includes("No MCP resources"), "ListMcpResources: friendly message when no servers");
   const read = await readMcpResourceTool.call({ server: "nope", uri: "x://y" }, ctx);
-  assert(read.isError === true && read.content.includes("not connected"), "ReadMcpResource: errors clearly when server missing");
+  assert(read.isError === true && toolResultText(read.content).includes("not connected"), "ReadMcpResource: errors clearly when server missing");
 
   console.log("\n[10] PowerShell Windows-gating + tool registry");
   assert(powerShellTool.isEnabled() === (process.platform === "win32"), "PowerShell only enabled on Windows");
@@ -325,7 +326,7 @@ async function main(): Promise<void> {
       { cwd: ctx.cwd, defaultModel: process.env.ANTHROPIC_MODEL },
     );
     assert(!live.isError && live.content.length > 0, "live WebFetch returns content");
-    console.log("    live result preview:", live.content.slice(0, 160).replace(/\n/g, " "));
+    console.log("    live result preview:", toolResultText(live.content).slice(0, 160).replace(/\n/g, " "));
   } else {
     console.log("  · skipped (set LIVE=1 to fetch a real page)");
   }

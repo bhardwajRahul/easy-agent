@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { bashTool } from "../tools/bashTool.js";
+import { toolResultText } from "../tools/Tool.js";
 import { isSandboxRuntimeReady } from "../sandbox/index.js";
 import { getProjectEasyAgentDir } from "../utils/paths.js";
 
@@ -48,17 +49,19 @@ async function main(): Promise<void> {
     { command: "echo hello-from-sandbox" },
     { cwd: work },
   );
-  expect("not an error", !ok.isError, ok.content);
-  expect("output mentions Sandbox: enabled", ok.content.includes("Sandbox: enabled"));
-  expect("stdout contains expected echo", ok.content.includes("hello-from-sandbox"));
+  const okText = toolResultText(ok.content);
+  expect("not an error", !ok.isError, okText);
+  expect("output mentions Sandbox: enabled", okText.includes("Sandbox: enabled"));
+  expect("stdout contains expected echo", okText.includes("hello-from-sandbox"));
 
   console.log(`\n[2] BashTool blocks a write to /etc and tags violation`);
   const denied = await bashTool.call(
     { command: "echo hijack > /etc/easy-agent-bash-test 2>&1" },
     { cwd: work },
   );
-  expect("is an error", denied.isError === true, denied.content);
-  expect("violation tag present in tool result", denied.content.includes("<sandbox_violations>"));
+  const deniedText = toolResultText(denied.content);
+  expect("is an error", denied.isError === true, deniedText);
+  expect("violation tag present in tool result", deniedText.includes("<sandbox_violations>"));
   expect("no rogue file landed in /etc", !fs.existsSync("/etc/easy-agent-bash-test"));
 
   console.log(`\n[2b] Redirect to /dev/null works under the sandbox`);
@@ -66,9 +69,10 @@ async function main(): Promise<void> {
     { command: `ls "${work}" 2>/dev/null && echo "---" && echo done` },
     { cwd: work },
   );
-  expect("not an error", !devnull.isError, devnull.content);
-  expect("no /dev/null permission violation", !devnull.content.includes("Operation not permitted"), devnull.content);
-  expect("stdout reached the echo after the redirect", devnull.content.includes("done"));
+  const devnullText = toolResultText(devnull.content);
+  expect("not an error", !devnull.isError, devnullText);
+  expect("no /dev/null permission violation", !devnullText.includes("Operation not permitted"), devnullText);
+  expect("stdout reached the echo after the redirect", devnullText.includes("done"));
 
   console.log(`\n[3] dangerouslyDisableSandbox + allowUnsandboxedCommands → bypass`);
   const escaped = await bashTool.call(
@@ -78,7 +82,7 @@ async function main(): Promise<void> {
   expect("not an error", !escaped.isError);
   expect(
     "output marks Sandbox: disabled",
-    escaped.content.includes("Sandbox: disabled"),
+    toolResultText(escaped.content).includes("Sandbox: disabled"),
   );
 
   console.log("");

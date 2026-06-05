@@ -13,7 +13,7 @@ loadEnv();
  */
 
 import { getAllTools, findToolByName, getToolsApiParams } from "../tools/index.js";
-import type { ToolContext } from "../tools/Tool.js";
+import { toolResultText, type ToolContext } from "../tools/Tool.js";
 
 const ctx: ToolContext = { cwd: process.cwd() };
 
@@ -36,10 +36,10 @@ async function main() {
   console.log("\n── Test: Read package.json ──\n");
   const result = await readTool.call({ file_path: "package.json" }, ctx);
   if (result.isError) {
-    console.error(`✗ Error reading package.json: ${result.content}`);
+    console.error(`✗ Error reading package.json: ${toolResultText(result.content)}`);
     process.exit(1);
   }
-  const lines = result.content.split("\n");
+  const lines = toolResultText(result.content).split("\n");
   console.log(`✓ Read package.json (${lines.length} output lines)`);
   // Show first 5 lines
   for (const line of lines.slice(0, 6)) {
@@ -55,7 +55,7 @@ async function main() {
     process.exit(1);
   }
   console.log(`✓ Partial read:`);
-  for (const line of partial.content.split("\n").slice(0, 7)) {
+  for (const line of toolResultText(partial.content).split("\n").slice(0, 7)) {
     console.log(`  ${line}`);
   }
 
@@ -66,7 +66,7 @@ async function main() {
     console.error("✗ Expected isError=true for missing file");
     process.exit(1);
   }
-  console.log(`✓ Correctly returned error: ${missing.content.split("\n")[0]}`);
+  console.log(`✓ Correctly returned error: ${toolResultText(missing.content).split("\n")[0]}`);
 
   // 5. API params format
   console.log("\n── Test: API parameter conversion ──\n");

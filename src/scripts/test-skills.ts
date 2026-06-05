@@ -23,6 +23,7 @@ import {
 import { formatSkillsSystemReminder } from "../services/skills/budget.js";
 import { activateConditionalSkillsForPaths } from "../services/skills/conditional.js";
 import { skillTool } from "../tools/skillTool.js";
+import { toolResultText } from "../tools/Tool.js";
 import { matchesPermissionRule } from "../permissions/permissions.js";
 
 const cwd = process.cwd();
@@ -106,12 +107,13 @@ async function main(): Promise<void> {
     { skill: "hello-world", args: "Easy Agent" },
     { cwd, sessionId: "session-test-abc" },
   );
-  console.log(okResult.content.split("\n").slice(0, 8).map((l) => `    ${l}`).join("\n"));
+  const okText = toolResultText(okResult.content);
+  console.log(okText.split("\n").slice(0, 8).map((l) => `    ${l}`).join("\n"));
   assert(!okResult.isError, "Skill call succeeded");
-  assert(okResult.content.includes("Easy Agent"), "$ARGUMENTS substituted with \"Easy Agent\"");
-  assert(okResult.content.includes("session-test-abc"), "${CLAUDE_SESSION_ID} substituted");
+  assert(okText.includes("Easy Agent"), "$ARGUMENTS substituted with \"Easy Agent\"");
+  assert(okText.includes("session-test-abc"), "${CLAUDE_SESSION_ID} substituted");
   assert(
-    okResult.content.includes(".easy-agent/skills/hello-world"),
+    okText.includes(".easy-agent/skills/hello-world"),
     "${CLAUDE_SKILL_DIR} substituted with the absolute skill path",
   );
 
@@ -120,10 +122,11 @@ async function main(): Promise<void> {
     { skill: "secret-handshake" },
     { cwd, sessionId: "x" },
   );
-  console.log(`    ${hiddenResult.content.split("\n")[0]}`);
+  const hiddenText = toolResultText(hiddenResult.content);
+  console.log(`    ${hiddenText.split("\n")[0]}`);
   assert(hiddenResult.isError, "Hidden skill rejected when invoked by the model");
   assert(
-    hiddenResult.content.includes("disable-model-invocation"),
+    hiddenText.includes("disable-model-invocation"),
     "Error message mentions disable-model-invocation",
   );
 

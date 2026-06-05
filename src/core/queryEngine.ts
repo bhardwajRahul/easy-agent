@@ -28,6 +28,7 @@ import {
 } from "../session/fileHistory.js";
 import { relative as relativePath } from "node:path";
 import { getToolsApiParams } from "../tools/index.js";
+import { buildUserMessageContent } from "./attachImages.js";
 import type { ToolContext } from "../tools/Tool.js";
 import type { Usage } from "../types/message.js";
 import type { ModelProfile } from "../services/api/providers/profile.js";
@@ -83,6 +84,7 @@ export type QueryEngineEvent =
   | { type: "usage_updated"; totalUsage: Usage; turnUsage: Usage; lastCallUsage: Usage }
   | { type: "token_warning"; warning: TokenWarningResult }
   | { type: "command"; message: string; kind: "info" | "error" }
+  | { type: "notice"; tone: "info" | "error"; title: string; body: string }
   | { type: "model_changed"; model: string; source: "default" | "session" }
   | { type: "session_cleared" }
   | { type: "mode_changed"; mode: PermissionMode; previousMode: PermissionMode }
@@ -634,7 +636,23 @@ export class QueryEngine {
     // input for the model. The Anthropic API also rejects empty
     // user-content blocks, so this guard is correctness, not just hygiene.
     if (promptToSubmit.length > 0) {
-      const userMessage: MessageParam = { role: "user", content: promptToSubmit };
+      // Attach any `@image.png` references as real image blocks so the model
+      // can see them. Falls back to a plain string when there are none.
+      const built = await buildUserMessageContent(promptToSubmit, this.toolContext.cwd);
+      // Image feedback is transient and must NOT seize the screen: emit it as a
+      // non-blocking notice (vs. a `command` panel, which pins above the input
+      // and hides it until Esc).
+      for (const err of built.errors) {
+        yield { type: "notice", tone: "error", title: "Image", body: err };
+      }
+      if (built.attached.length > 0) {
+        const names = built.attached.map((a) => a.ref).join(", ");
+        yield { type: "notice", tone: "info", title: "Image attached", body: names };
+      }
+      const userMessage: MessageParam = {
+        role: "user",
+        content: built.content as MessageParam["content"],
+      };
       this.messages = [...this.messages, userMessage];
       yield { type: "messages_updated", messages: [...this.messages] };
     }

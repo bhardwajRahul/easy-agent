@@ -45,11 +45,29 @@ export interface ThinkingBlock {
   signature?: string;
 }
 
+/**
+ * Image content block. The shape mirrors Anthropic's `ImageBlockParam`
+ * exactly so it can be embedded in a `MessageParam` and sent to the
+ * Anthropic API verbatim (zero translation). The provider layer maps it
+ * to OpenAI `image_url` / Gemini `inline_data` on the non-Anthropic paths.
+ *
+ *   - base64 source: inline image bytes (what `Read`, `@file`, and the
+ *     clipboard path all produce)
+ *   - url source: a remote image URL (rarely used locally, kept for parity)
+ */
+export interface ImageBlock {
+  type: "image";
+  source:
+    | { type: "base64"; media_type: string; data: string }
+    | { type: "url"; url: string };
+}
+
 export type ContentBlock =
   | TextBlock
   | ToolUseBlock
   | ToolResultBlock
-  | ThinkingBlock;
+  | ThinkingBlock
+  | ImageBlock;
 
 // ─── Message Types ─────────────────────────────────────────────────
 
