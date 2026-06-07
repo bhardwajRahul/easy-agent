@@ -72,15 +72,19 @@ export function ToolDot({ state }: { state: ToolState }): React.ReactNode {
 export function ToolCardHeader({
   line,
   state,
+  tag,
 }: {
   line: ToolLine;
   state: ToolState;
+  /** Optional dim `[tag]` after the target (timeout, HTTP status, MCP server…). */
+  tag?: string;
 }): React.ReactNode {
   return (
     <Box>
       <ToolDot state={state} />
       <Text bold>{line.label}</Text>
       {line.target ? <Text color={theme.muted}>{`(${line.target})`}</Text> : null}
+      {tag ? <Text color={theme.muted}>{` [${tag}]`}</Text> : null}
     </Box>
   );
 }

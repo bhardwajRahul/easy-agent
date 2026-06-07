@@ -23,6 +23,7 @@ import {
   formatErrorBody,
   parseBashResult,
   summarizeTool,
+  toolUseTag,
   type ToolLine,
   type ToolResultInfo,
 } from "../utils/toolCardFormat.js";
@@ -306,16 +307,18 @@ function DefaultErrorCard({
   line,
   result,
   verbose,
+  tag,
 }: {
   line: ToolLine;
   result: ToolResultInfo;
   verbose: boolean;
+  tag?: string;
 }): React.ReactNode {
   const body = formatErrorBody(result.content);
   const multiLine = body.includes("\n");
   return (
     <Box flexDirection="column">
-      <ToolCardHeader line={line} state="error" />
+      <ToolCardHeader line={line} state="error" tag={tag} />
       {result.content ? (
         verbose ? (
           <ResultLine>
@@ -360,11 +363,12 @@ export function renderInlineToolCard({
   if (renderer?.renderCard) return renderer.renderCard(ctx);
 
   const line = renderer?.renderToolUse?.(input, result.content) ?? summarizeTool(name, input, result.content);
+  const tag = toolUseTag(name, input, result.content);
 
   // Errors: unless the tool renders its own error body (Bash), use the
   // generic error card.
   if (result.isError && !renderer?.handlesError) {
-    return <DefaultErrorCard line={line} result={result} verbose={verbose} />;
+    return <DefaultErrorCard line={line} result={result} verbose={verbose} tag={tag} />;
   }
 
   // Tools with a custom body own their result rendering.
@@ -374,7 +378,7 @@ export function renderInlineToolCard({
       : (renderer.renderResultSummary ?? renderer.renderResultVerbose)!(ctx);
     return (
       <Box flexDirection="column">
-        <ToolCardHeader line={line} state={result.isError ? "error" : "ok"} />
+        <ToolCardHeader line={line} state={result.isError ? "error" : "ok"} tag={tag} />
         {body}
       </Box>
     );
@@ -384,7 +388,7 @@ export function renderInlineToolCard({
   // without a registered body).
   return (
     <Box flexDirection="column">
-      <ToolCardHeader line={line} state="ok" />
+      <ToolCardHeader line={line} state="ok" tag={tag} />
       <ToolResultSummary line={line} />
     </Box>
   );

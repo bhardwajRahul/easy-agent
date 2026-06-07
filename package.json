@@ -39,6 +39,7 @@
     "test:tool-states": "tsx src/scripts/smoke-tool-states.tsx",
     "test:bash-progress": "tsx src/scripts/smoke-bash-progress.tsx",
     "test:live-group": "tsx src/scripts/smoke-live-group.tsx",
+    "test:tool-tags": "tsx src/scripts/smoke-tool-tags.tsx",
     "test:stage24-statusline": "tsx src/scripts/smoke-statusline.tsx",
     "test:stage24-command": "tsx src/scripts/smoke-command.tsx",
     "test:stage25": "tsx src/scripts/smoke-config.ts",

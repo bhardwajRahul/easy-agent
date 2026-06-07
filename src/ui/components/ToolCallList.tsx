@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { ToolCallInfo } from "../types.js";
-import { computeCollapsedCounts, formatErrorBody, summarizeTool } from "../utils/toolCardFormat.js";
+import { computeCollapsedCounts, formatErrorBody, summarizeTool, toolUseTag } from "../utils/toolCardFormat.js";
 import { classifyToolForCollapse, getCollapsedSummaryText } from "../utils/toolClassify.js";
 import { ResultLine, ToolCardHeader, ToolDot, ToolResultSummary, type ToolState } from "./ToolCard.js";
 import { SubAgentCard } from "./SubAgentCard.js";
@@ -110,6 +110,10 @@ function BashProgressBody({ progress }: { progress: BashProgress }): React.React
 /** One in-flight tool card (header + phase sub-line / progress / result). */
 function SingleToolCard({ toolCall }: { toolCall: ToolCallInfo }): React.ReactNode {
   const pending = toolCall.resultLength === undefined;
+  // Live cards have only the input (no result content yet), so result-derived
+  // tags (WebFetch status) appear once archived — input tags (timeout, MCP
+  // server) show immediately.
+  const tag = toolUseTag(toolCall.name, toolCall.input);
 
   const line = summarizeTool(toolCall.name, toolCall.input);
   // Use the model-facing displayName override when present (e.g.
@@ -129,7 +133,7 @@ function SingleToolCard({ toolCall }: { toolCall: ToolCallInfo }): React.ReactNo
     if (toolCall.name === "Bash" && toolCall.bashProgress) {
       return (
         <Box flexDirection="column">
-          <ToolCardHeader line={headerLine} state="running" />
+          <ToolCardHeader line={headerLine} state="running" tag={tag} />
           <BashProgressBody progress={toolCall.bashProgress} />
         </Box>
       );
@@ -138,7 +142,7 @@ function SingleToolCard({ toolCall }: { toolCall: ToolCallInfo }): React.ReactNo
     const phaseText = phaseSubLine(liveState);
     return (
       <Box flexDirection="column">
-        <ToolCardHeader line={headerLine} state={liveState} />
+        <ToolCardHeader line={headerLine} state={liveState} tag={tag} />
         {phaseText ? (
           <ResultLine>
             <Text color={theme.muted}>{phaseText}</Text>
@@ -151,7 +155,7 @@ function SingleToolCard({ toolCall }: { toolCall: ToolCallInfo }): React.ReactNo
   if (toolCall.isError) {
     return (
       <Box flexDirection="column">
-        <ToolCardHeader line={line} state="error" />
+        <ToolCardHeader line={line} state="error" tag={tag} />
         {toolCall.errorMessage ? (
           <ResultLine>
             <Text color={theme.error}>{formatErrorBody(toolCall.errorMessage)}</Text>
@@ -170,7 +174,7 @@ function SingleToolCard({ toolCall }: { toolCall: ToolCallInfo }): React.ReactNo
 
   return (
     <Box flexDirection="column">
-      <ToolCardHeader line={line} state="ok" />
+      <ToolCardHeader line={line} state="ok" tag={tag} />
       <ToolResultSummary line={line} />
     </Box>
   );

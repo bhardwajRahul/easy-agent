@@ -9,6 +9,7 @@
 
 import path from "node:path";
 import { diffStats } from "./diffFormat.js";
+import { formatDuration } from "./format.js";
 import {
   classifyBashLabel,
   classifyToolForCollapse,
@@ -16,6 +17,10 @@ import {
   shortenCommand,
   type CollapsedCounts,
 } from "./toolClassify.js";
+
+// Keep in sync with bashTool's DEFAULT_TIMEOUT_MS — only a non-default timeout
+// is worth surfacing as a tag.
+const DEFAULT_BASH_TIMEOUT_MS = 120_000;
 
 const MAX_ERROR_LINES = 12;
 const MAX_ERROR_CHARS = 2000;
@@ -407,6 +412,49 @@ export function computeCollapsedCounts(members: CollapseInput[]): {
     },
     targets,
   };
+}
+
+/**
+ * A short tag rendered after a tool-card header (`Bash(npm test) [timeout: 5m]`,
+ * `WebFetch(example.com) [200 OK]`, `MCP read [slack]`). Mirrors source's
+ * per-tool `renderToolUseTag`: a low-noise, high-density hint that augments the
+ * `Label(target)` without competing with it. Returns undefined for tools that
+ * have nothing useful to tag.
+ *
+ * Input-derived tags (timeout, MCP server) work for both live and history
+ * cards; result-derived tags (WebFetch status) only render once the result has
+ * landed, so `result` is optional and callers without it simply get less.
+ */
+export function toolUseTag(
+  name: string,
+  input: Record<string, unknown> | undefined,
+  result?: string,
+): string | undefined {
+  // Bash/PowerShell: surface a non-default timeout so a deliberately long (or
+  // short) command reads as intentional rather than "why is this still going".
+  if (name === "Bash" || name === "PowerShell") {
+    const timeout = input?.["timeout"];
+    if (typeof timeout === "number" && timeout > 0 && timeout !== DEFAULT_BASH_TIMEOUT_MS) {
+      return `timeout: ${formatDuration(timeout, { hideTrailingZeros: true })}`;
+    }
+    return undefined;
+  }
+
+  // WebFetch: HTTP status from the result header `Fetched <url> (200 OK, …)`.
+  if (name === "WebFetch") {
+    if (!result) return undefined;
+    if (result.startsWith("REDIRECT DETECTED")) return "redirect";
+    const m = result.match(/\((\d{3}) ([^,)]+)[,)]/);
+    return m ? `${m[1]} ${m[2]!.trim()}` : undefined;
+  }
+
+  // MCP tools (dynamic `mcp__server__tool` + the resource tools): tag the
+  // server so a wall of `mcp__…` calls is attributable at a glance.
+  if (name.startsWith("mcp__") || name === "ListMcpResources" || name === "ReadMcpResource") {
+    return mcpServerNameOf(name, input);
+  }
+
+  return undefined;
 }
 
 /**

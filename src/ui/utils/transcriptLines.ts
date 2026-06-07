@@ -29,6 +29,7 @@ import {
   formatErrorBody,
   parseBashResult,
   summarizeTool,
+  toolUseTag,
   type ToolLine,
 } from "./toolCardFormat.js";
 import { isSilentBashCommand } from "./toolClassify.js";
@@ -46,12 +47,13 @@ const paint = {
 const CORNER = `  ${glyph.resultCorner} `; // "  ⎿ "
 const BODY_INDENT = "    "; // 4 cols, aligns under the corner
 
-/** Header line for a tool card: `● Label(target)`. */
-function toolHeader(line: ToolLine, isError: boolean): string {
+/** Header line for a tool card: `● Label(target) [tag]`. */
+function toolHeader(line: ToolLine, isError: boolean, tag?: string): string {
   const dot = paint[isError ? "error" : "ok"](glyph.toolDot);
   const label = chalk.bold(line.label);
   const target = line.target ? paint.muted(`(${line.target})`) : "";
-  return `${dot} ${label}${target}`;
+  const tagText = tag ? paint.muted(` [${tag}]`) : "";
+  return `${dot} ${label}${target}${tagText}`;
 }
 
 /** Condensed `⎿` summary (`+N -M` or free-text stat). */
@@ -64,7 +66,7 @@ function toolSummary(line: ToolLine): string {
 
 function pushToolLines(out: string[], name: string, input: Record<string, unknown> | undefined, result: ToolResultInfo): void {
   const line = summarizeTool(name, input, result.content);
-  out.push(toolHeader(line, result.isError));
+  out.push(toolHeader(line, result.isError, toolUseTag(name, input, result.content)));
 
   // Bash/PowerShell → full stdout (dim) + stderr (red) layered under the
   // corner, plus timeout / no-output states. Transcript is the verbose view,
