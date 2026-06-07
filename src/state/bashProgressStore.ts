@@ -12,12 +12,20 @@
  * notifying on every chunk would repaint the whole live frame dozens of times a
  * second. We coalesce notifications to ~10fps (leading + trailing edge) so the
  * UI stays smooth, and always flush on completion.
+ *
+ * Heartbeat: output alone can't drive the UI — a silent command (`sleep 600`,
+ * an `npm install` stuck resolving, anything block-buffering its stdout) would
+ * emit nothing and the card would freeze at "Running… (0s)". So while a command
+ * runs we also tick once a second, re-emitting the snapshot so the live card
+ * re-renders and its elapsed clock advances. This mirrors source's per-second
+ * progress poller (TaskOutput.startPolling → onProgress every 1s).
  */
 
 // Keep only the tail in memory — the model gets the full output from the
 // tool's own accumulation; the store exists purely to feed the live preview.
 const MAX_TAIL_LINES = 40;
 const NOTIFY_INTERVAL_MS = 100;
+const TICK_INTERVAL_MS = 1000;
 
 export interface BashProgress {
   /** Tail of combined stdout+stderr (capped to MAX_TAIL_LINES). */
@@ -42,6 +50,8 @@ const listeners = new Set<Listener>();
 // Throttle bookkeeping, per tool id.
 const lastNotifyAt = new Map<string, number>();
 const trailingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// Per-command heartbeat interval (the "still running, clock ticking" pulse).
+const tickTimers = new Map<string, ReturnType<typeof setInterval>>();
 
 function emit(toolUseId: string, snapshot: BashProgress | null): void {
   for (const l of listeners) l(toolUseId, snapshot);
@@ -72,6 +82,9 @@ function clearTimers(toolUseId: string): void {
   if (timer) clearTimeout(timer);
   trailingTimers.delete(toolUseId);
   lastNotifyAt.delete(toolUseId);
+  const tick = tickTimers.get(toolUseId);
+  if (tick) clearInterval(tick);
+  tickTimers.delete(toolUseId);
 }
 
 export function getBashProgress(toolUseId: string): BashProgress | undefined {
@@ -79,6 +92,8 @@ export function getBashProgress(toolUseId: string): BashProgress | undefined {
 }
 
 export function startBashProgress(toolUseId: string, timeoutMs?: number): void {
+  // A re-run with the same id shouldn't stack heartbeats.
+  clearTimers(toolUseId);
   store.set(toolUseId, {
     output: "",
     totalLines: 0,
@@ -88,6 +103,17 @@ export function startBashProgress(toolUseId: string, timeoutMs?: number): void {
     done: false,
   });
   emit(toolUseId, store.get(toolUseId) ?? null);
+
+  // Heartbeat: re-emit the live snapshot every second so the card's elapsed
+  // clock keeps moving even when the command produces no output. Cleared on
+  // completion. unref() so a stray tick never keeps the process alive.
+  const tick = setInterval(() => {
+    const cur = store.get(toolUseId);
+    if (!cur || cur.done) return;
+    emit(toolUseId, cur);
+  }, TICK_INTERVAL_MS);
+  tick.unref?.();
+  tickTimers.set(toolUseId, tick);
 }
 
 export function appendBashProgress(toolUseId: string, chunk: string): void {

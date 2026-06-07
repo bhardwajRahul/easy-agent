@@ -59,7 +59,7 @@ function shellTimeHint(elapsedSec: number | undefined, timeoutMs?: number): stri
  *   - before any output: a bare `Running… (elapsed · timeout)` line
  */
 function BashProgressBody({ progress }: { progress: BashProgress }): React.ReactNode {
-  const elapsedSec = Math.max(0, Math.round((Date.now() - progress.startTime) / 1000));
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - progress.startTime) / 1000));
   const lines = progress.output.split("\n").filter((l) => l.length > 0);
   const tail = lines.slice(-BASH_TAIL_LINES);
 
