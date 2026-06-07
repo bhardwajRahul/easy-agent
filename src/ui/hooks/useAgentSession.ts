@@ -65,6 +65,10 @@ import {
   clearAllBashProgress,
   subscribeBashProgress,
 } from "../../state/bashProgressStore.js";
+import {
+  clearAllToolStatus,
+  subscribeToolStatus,
+} from "../../state/toolStatusStore.js";
 import { clearUiNotices } from "../../state/uiNoticeStore.js";
 import {
   getAllAsyncAgents,
@@ -321,6 +325,26 @@ export function useAgentSession({
             return rest;
           }
           return { ...tc, bashProgress: snapshot };
+        }),
+      );
+    });
+    return unsubscribe;
+  }, []);
+
+  // Mirror the live execution phase (queued → classifier → waiting-permission
+  // → running), published by the agentic loop's runOneToolBlock, into the
+  // matching card so the dot + sub-line reflect "what is this tool doing right
+  // now". Same id-keyed bridge as bash/sub-agent progress above.
+  useEffect(() => {
+    const unsubscribe = subscribeToolStatus((toolUseId, status) => {
+      setToolCalls((prev) =>
+        prev.map((tc) => {
+          if (tc.id !== toolUseId) return tc;
+          if (status === null) {
+            const { status: _drop, ...rest } = tc;
+            return rest;
+          }
+          return { ...tc, status };
         }),
       );
     });
@@ -874,6 +898,7 @@ export function useAgentSession({
             // card from the formatted tool_result text, not the store.
             clearAllSubAgentProgress();
             clearAllBashProgress();
+            clearAllToolStatus();
             await appendTranscriptEntry(toolContext.cwd, sessionIdRef.current, {
               type: "message",
               timestamp: new Date().toISOString(),
@@ -1032,6 +1057,7 @@ export function useAgentSession({
             setToolCalls([]);
             clearAllSubAgentProgress();
             clearAllBashProgress();
+            clearAllToolStatus();
             clearUiNotices();
             setResumePicker(null);
             setDiffView(null);
@@ -1077,6 +1103,7 @@ export function useAgentSession({
             clearTodos(sessionIdRef.current);
             clearAllSubAgentProgress();
             clearAllBashProgress();
+            clearAllToolStatus();
             clearUiNotices();
             // Wipe the terminal so the previous conversation is gone from the
             // screen and scrollback, matching the user's expectation that

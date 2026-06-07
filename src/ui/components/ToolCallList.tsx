@@ -2,10 +2,28 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ToolCallInfo } from "../types.js";
 import { formatErrorBody, summarizeTool } from "../utils/toolCardFormat.js";
-import { ResultLine, ToolCardHeader, ToolResultSummary } from "./ToolCard.js";
+import { ResultLine, ToolCardHeader, ToolResultSummary, type ToolState } from "./ToolCard.js";
 import { SubAgentCard } from "./SubAgentCard.js";
 import { theme } from "../theme.js";
 import type { BashProgress } from "../../state/bashProgressStore.js";
+
+/**
+ * The `⎿` sub-line shown under an in-flight card for the non-running phases.
+ * Running cards have no sub-line (their progress shows elsewhere, e.g. the
+ * Bash tail). Wording mirrors source's queued / permission / classifier text.
+ */
+function phaseSubLine(state: ToolState): string | null {
+  switch (state) {
+    case "queued":
+      return "Waiting…";
+    case "waiting-permission":
+      return "Waiting for permission…";
+    case "classifier":
+      return "Auto classifier checking…";
+    default:
+      return null;
+  }
+}
 
 interface ToolCallListProps {
   toolCalls: ToolCallInfo[];
@@ -71,6 +89,11 @@ export function ToolCallList({ toolCalls, leadingMarginTop = 0 }: ToolCallListPr
         if (toolCall.displayName) line.label = toolCall.displayName;
 
         if (pending) {
+          const headerLine = { label: toolCall.displayName ?? line.label, target: line.target };
+          // The live phase drives the dot + an optional sub-line. Absent
+          // status = queued (model emitted the call, loop hasn't started it).
+          const liveState: ToolState = toolCall.status ?? "queued";
+
           // Bash: while the command runs, show its streaming tail under the
           // header so long commands (installs, test runs, `find /`) aren't a
           // frozen spinner. Falls back to the bare header before the first
@@ -78,20 +101,22 @@ export function ToolCallList({ toolCalls, leadingMarginTop = 0 }: ToolCallListPr
           if (toolCall.name === "Bash" && toolCall.bashProgress) {
             return (
               <Box key={key} flexDirection="column">
-                <ToolCardHeader
-                  line={{ label: toolCall.displayName ?? toolCall.name, target: line.target }}
-                  state="pending"
-                />
+                <ToolCardHeader line={headerLine} state="running" />
                 <BashProgressBody progress={toolCall.bashProgress} />
               </Box>
             );
           }
+
+          const phaseText = phaseSubLine(liveState);
           return (
-            <ToolCardHeader
-              key={key}
-              line={{ label: toolCall.displayName ?? toolCall.name, target: line.target }}
-              state="pending"
-            />
+            <Box key={key} flexDirection="column">
+              <ToolCardHeader line={headerLine} state={liveState} />
+              {phaseText ? (
+                <ResultLine>
+                  <Text color={theme.muted}>{phaseText}</Text>
+                </ResultLine>
+              ) : null}
+            </Box>
           );
         }
 

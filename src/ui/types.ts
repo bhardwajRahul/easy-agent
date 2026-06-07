@@ -1,6 +1,7 @@
 import type { PermissionMode } from "../permissions/permissions.js";
 import type { SubAgentProgress } from "../state/subAgentProgressStore.js";
 import type { BashProgress } from "../state/bashProgressStore.js";
+import type { ToolStatus } from "../state/toolStatusStore.js";
 
 export interface ToolCallInfo {
   /**
@@ -16,6 +17,12 @@ export interface ToolCallInfo {
   displayHint?: string;
   resultLength?: number;
   isError?: boolean;
+  /**
+   * Live execution phase, mirrored from `toolStatusStore` while the tool is
+   * in flight. Absent → the card is queued (model emitted the tool_use but
+   * the loop hasn't started it). Ignored once `resultLength` is set (done).
+   */
+  status?: ToolStatus;
   /** Short one-line summary of tool input (shown for debugging). */
   inputPreview?: string;
   /**

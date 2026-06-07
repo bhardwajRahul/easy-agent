@@ -1,7 +1,13 @@
 import React from "react";
 import { Box, Text, useStdout } from "ink";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
-import { extractBashOutput, formatErrorBody, summarizeTool } from "../utils/toolCardFormat.js";
+import { formatErrorBody, parseBashResult, summarizeTool } from "../utils/toolCardFormat.js";
+import {
+  classifyToolForCollapse,
+  getCollapsedSummaryText,
+  isSilentBashCommand,
+  mcpServerNameOf,
+} from "../utils/toolClassify.js";
 import { Markdown } from "../markdown/Markdown.js";
 import { StructuredDiff } from "./StructuredDiff.js";
 import { ResultLine, ToolCardHeader, ToolResultSummary } from "./ToolCard.js";
@@ -10,6 +16,10 @@ import { theme, glyph } from "../theme.js";
 // Safety cap on how many output lines a verbose Bash card prints, so a runaway
 // command (npm install, a 50k-line log) can't blow up the frame.
 const BASH_VERBOSE_MAX_LINES = 200;
+// Default (condensed) cap — mirrors source's OutputLine MAX_LINES_TO_SHOW so
+// the inline history stays an activity stream; the full output lives in the
+// Ctrl+O transcript.
+const BASH_DEFAULT_MAX_LINES = 3;
 
 /** First non-empty line of a block of text (the condensed one-liner). */
 function firstLine(text: string): string {
@@ -76,6 +86,97 @@ function UserMessageBar({
         <Text color={textColor}>{text}</Text>
       </Box>
     </Box>
+  );
+}
+
+/**
+ * One output layer (stdout or stderr) capped at `max` lines, with a
+ * `… +N lines (ctrl+o to expand)` footer when truncated. Designed to sit
+ * inside a single `<ResultLine>` so stdout and stderr stack under one corner.
+ */
+function CappedLines({
+  text,
+  color,
+  max,
+}: {
+  text: string;
+  color: string;
+  max: number;
+}): React.ReactNode {
+  const lines = text.split("\n");
+  const shown = lines.slice(0, max);
+  const hidden = lines.length - shown.length;
+  return (
+    <>
+      {shown.map((line, i) => (
+        <Text key={i} color={color} wrap="truncate-end">{line || " "}</Text>
+      ))}
+      {hidden > 0 ? (
+        <Text key="more" color={theme.muted}>
+          {`… +${hidden} line${hidden === 1 ? "" : "s"} (ctrl+o to expand)`}
+        </Text>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Layered Bash result body, mirroring source's BashToolResultMessage:
+ *   - stdout  → dim (muted)
+ *   - stderr  → error (red), with <sandbox_violations> stripped
+ *   - timeout → warning
+ *   - empty   → "Done" (silent commands) or "(No output)"
+ * Default view caps each stream at BASH_DEFAULT_MAX_LINES; verbose (transcript)
+ * shows the full output up to the safety cap.
+ */
+function BashResultBody({
+  result,
+  verbose,
+}: {
+  result: ToolResultInfo;
+  verbose: boolean;
+}): React.ReactNode {
+  const parsed = parseBashResult(result.content);
+  const max = verbose ? BASH_VERBOSE_MAX_LINES : BASH_DEFAULT_MAX_LINES;
+  const hasStdout = parsed.stdout.length > 0;
+  const hasStderr = parsed.stderr.length > 0;
+
+  if (parsed.timeoutMessage) {
+    return (
+      <ResultLine>
+        <Text color={theme.warn}>{parsed.timeoutMessage}</Text>
+      </ResultLine>
+    );
+  }
+
+  if (!hasStdout && !hasStderr) {
+    if (parsed.errorMessage) {
+      return (
+        <ResultLine>
+          <CappedLines text={parsed.errorMessage} color={theme.error} max={max} />
+        </ResultLine>
+      );
+    }
+    if (parsed.hadSandboxViolation) {
+      return (
+        <ResultLine>
+          <Text color={theme.warn}>{"Blocked by sandbox"}</Text>
+        </ResultLine>
+      );
+    }
+    const silent = parsed.command ? isSilentBashCommand(parsed.command) : false;
+    return (
+      <ResultLine>
+        <Text color={theme.muted}>{silent ? "Done" : "(No output)"}</Text>
+      </ResultLine>
+    );
+  }
+
+  return (
+    <ResultLine>
+      {hasStdout ? <CappedLines text={parsed.stdout} color={theme.muted} max={max} /> : null}
+      {hasStderr ? <CappedLines text={parsed.stderr} color={theme.error} max={max} /> : null}
+    </ResultLine>
   );
 }
 
@@ -317,35 +418,14 @@ function InlineToolCard({
   const line = summarizeTool(name, input, result.content);
   const state = result.isError ? "error" : "ok";
 
-  // Bash: header shows `Bash(command)`. Condensed → first output line + an
-  // expand hint; verbose → the full (capped) stdout/stderr under the corner.
-  if (name === "Bash") {
-    const output = extractBashOutput(result.content);
-    const bodyColor = result.isError ? theme.error : undefined;
-    if (!output) {
-      return (
-        <Box flexDirection="column">
-          <ToolCardHeader line={line} state={state} />
-          <ToolResultSummary line={line} />
-        </Box>
-      );
-    }
-    const multiLine = output.includes("\n");
+  // Bash/PowerShell: header shows `Label(command)`; the body layers stdout
+  // (dim), stderr (red), timeout (warning) and empty-output states. Default
+  // caps each stream at a few lines; the full output lives in the transcript.
+  if (name === "Bash" || name === "PowerShell") {
     return (
       <Box flexDirection="column">
         <ToolCardHeader line={line} state={state} />
-        {verbose ? (
-          <ResultLine>
-            <OutputBody text={output} color={bodyColor} max={BASH_VERBOSE_MAX_LINES} />
-          </ResultLine>
-        ) : (
-          <ResultLine>
-            <Text>
-              <Text color={bodyColor ?? theme.muted}>{firstLine(output)}</Text>
-              {multiLine ? <Text color={theme.muted}>{"  (ctrl+o to expand)"}</Text> : null}
-            </Text>
-          </ResultLine>
-        )}
+        <BashResultBody result={result} verbose={verbose} />
       </Box>
     );
   }
@@ -405,10 +485,8 @@ function InlineToolCard({
   );
 }
 
-// Read-only inspection tools whose consecutive runs collapse into one
-// summary line. Mirrors source's collapseReadSearch — a turn that reads 6
-// files + greps twice shouldn't print 8 separate cards.
-const GROUPABLE_TOOLS = new Set(["Read", "Grep", "Glob"]);
+// Minimum run length before a sequence of read/search calls collapses, and
+// how many targets to preview under the `⎿` corner.
 const GROUP_MIN = 2;
 const GROUP_TARGET_PREVIEW = 4;
 
@@ -418,25 +496,77 @@ interface GroupMember {
   result: ToolResultInfo;
 }
 
+/** True when a committed tool use can fold into a read/search summary group. */
+function isCollapsibleMember(
+  name: string | undefined,
+  input: Record<string, unknown> | undefined,
+  result: ToolResultInfo | undefined,
+): boolean {
+  if (!name || !result || result.isError) return false;
+  return classifyToolForCollapse(name, input) !== null;
+}
+
 /**
- * Collapsed card for a run of consecutive Read/Grep/Glob calls. Header counts
- * each tool kind ("Read 3 · Grep 2"); the `⎿` line lists the first few targets
- * so the paths aren't lost. Full per-call detail still lives in the Ctrl+O
- * transcript.
+ * Collapsed card for a run of consecutive read/search/list/MCP/memory calls.
+ * The header is a semantic one-liner ("Searched 5 patterns · Read 12 files ·
+ * Listed 3 directories"); the `⎿` line previews the first few targets so the
+ * paths/patterns aren't lost. Full per-call detail still lives in the Ctrl+O
+ * transcript. Mirrors source's collapseReadSearch — a turn that reads 6 files
+ * + greps twice + lists a dir shouldn't print 9 separate cards.
  */
 function GroupedReadSearchCard({ members }: { members: GroupMember[] }): React.ReactNode {
-  const counts = new Map<string, number>();
+  const readFilePaths = new Set<string>();
+  const mcpServers = new Set<string>();
+  let searchCount = 0;
+  let readOps = 0;
+  let listCount = 0;
+  let mcpCount = 0;
+  let memoryWriteCount = 0;
   const targets: string[] = [];
+
   for (const m of members) {
-    counts.set(m.name, (counts.get(m.name) ?? 0) + 1);
+    const kind = classifyToolForCollapse(m.name, m.input);
     const line = summarizeTool(m.name, m.input, m.result.content);
     if (line.target) targets.push(line.target);
+    switch (kind) {
+      case "search":
+        searchCount += 1;
+        break;
+      case "list":
+        listCount += 1;
+        break;
+      case "read": {
+        const filePath = typeof m.input?.file_path === "string" ? (m.input.file_path as string) : undefined;
+        if (filePath) readFilePaths.add(filePath);
+        else readOps += 1; // bash cat/head/… — no path to dedupe by
+        break;
+      }
+      case "mcp": {
+        mcpCount += 1;
+        const server = mcpServerNameOf(m.name, m.input);
+        if (server) mcpServers.add(server);
+        break;
+      }
+      case "memoryWrite":
+        memoryWriteCount += 1;
+        break;
+      default:
+        break;
+    }
   }
-  const label = [...counts.entries()].map(([n, c]) => `${n} ${c}`).join(" · ");
+
+  const label = getCollapsedSummaryText({
+    searchCount,
+    readCount: readFilePaths.size + readOps,
+    listCount,
+    mcpCount,
+    memoryWriteCount,
+    mcpServerName: mcpServers.size === 1 ? [...mcpServers][0] : undefined,
+  });
+
   const preview = targets.slice(0, GROUP_TARGET_PREVIEW);
   const hidden = targets.length - preview.length;
-  const summary =
-    preview.join(", ") + (hidden > 0 ? `, +${hidden} more` : "");
+  const summary = preview.join(", ") + (hidden > 0 ? `, +${hidden} more` : "");
   return (
     <Box flexDirection="column">
       <Box>
@@ -475,7 +605,11 @@ function withToolLeadSpacing(
   element: React.ReactNode,
   previousKind: VisibleItemKind | null,
 ): React.ReactNode {
-  if (!previousKind || previousKind === "tool") return element;
+  // One blank line above every card (after a prompt/text reply AND between
+  // consecutive tool cards) so the history reads as a spaced activity stream
+  // instead of a dense log wall. Only the very first item of the turn hugs
+  // the top.
+  if (!previousKind) return element;
   return <Box marginTop={1}>{element}</Box>;
 }
 
@@ -613,26 +747,23 @@ export function flattenConversation(
             // append-only (the live ToolCallList shows the in-flight card).
             if (!result) continue;
 
-            // Collapse a contiguous run of successful Read/Grep/Glob calls
-            // into a single grouped card. The run is bounded by this
+            // Collapse a contiguous run of successful read/search/list/MCP/
+            // memory calls into a single grouped card. This covers Read/Grep/
+            // Glob, Bash inspection commands (ls/cat/rg/grep/find/tree/du…),
+            // MCP queries, and memory writes. The run is bounded by this
             // assistant message, so by the time any result exists all of its
             // results exist too — the grouped item is final on first emit and
             // never mutates (preserving the <Static> append-only invariant).
-            if (GROUPABLE_TOOLS.has(block.name) && !result.isError) {
+            if (isCollapsibleMember(block.name, block.input, result)) {
               const run: GroupMember[] = [{ name: block.name, input: block.input, result }];
               let k = j + 1;
               while (k < blocks.length) {
                 const next = blocks[k];
-                if (
-                  next?.type !== "tool_use" ||
-                  typeof next.id !== "string" ||
-                  typeof next.name !== "string" ||
-                  !GROUPABLE_TOOLS.has(next.name)
-                )
+                if (next?.type !== "tool_use" || typeof next.id !== "string" || typeof next.name !== "string")
                   break;
                 const nextResult = toolResults.get(next.id);
-                if (!nextResult || nextResult.isError) break;
-                run.push({ name: next.name, input: next.input, result: nextResult });
+                if (!isCollapsibleMember(next.name, next.input, nextResult)) break;
+                run.push({ name: next.name, input: next.input, result: nextResult! });
                 k++;
               }
               if (run.length >= GROUP_MIN) {

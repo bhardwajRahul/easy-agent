@@ -25,6 +25,7 @@ import {
 } from "../services/skills/conditional.js";
 import { tokenCountWithEstimation } from "../utils/tokens.js";
 import { fileHistoryTrackEdit } from "../session/fileHistory.js";
+import { setToolStatus } from "../state/toolStatusStore.js";
 import * as path from "node:path";
 import { isAtBlockingLimit, calculateTokenWarningState, type TokenWarningResult } from "../context/autoCompact.js";
 import type { ContentBlock, TextBlock, ToolUseBlock, Usage } from "../types/message.js";
@@ -351,11 +352,17 @@ async function runOneToolBlock(
     }
 
     const liveMode = context.getPermissionMode?.() as PermissionMode | undefined;
+    const effectiveMode = liveMode ?? options.permissionMode;
+    // Auto mode runs the safety classifier INSIDE checkPermission — surface
+    // that to the card as "classifier checking…" while it's in flight.
+    if (effectiveMode === "auto") {
+      setToolStatus(block.id, "classifier");
+    }
     let permission = await checkPermission({
       tool,
       input: toolInput,
       cwd: context.cwd,
-      mode: liveMode ?? options.permissionMode,
+      mode: effectiveMode,
       settings: options.permissionSettings,
       sessionRules: options.sessionPermissionRules,
       messages: options.conversationMessages,
@@ -412,6 +419,9 @@ async function runOneToolBlock(
       if (options.shouldAvoidPermissionPrompts === true) {
         decision = "deny";
       } else {
+        // Mark this specific card as blocked on the user's approval so the
+        // UI can show "Waiting for permission…" on it (not just the prompt).
+        setToolStatus(block.id, "waiting-permission");
         decision = options.onPermissionRequest
           ? await options.onPermissionRequest(permission.request)
           : "deny";
@@ -461,6 +471,8 @@ async function runOneToolBlock(
       }
     }
 
+    // Permission cleared (or never needed) — the tool is now executing.
+    setToolStatus(block.id, "running");
     const rawResult = await tool.call(toolInput, callContext);
     let result: ToolResult = {
       ...rawResult,

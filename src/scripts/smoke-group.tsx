@@ -1,8 +1,14 @@
 /**
- * Visual smoke for Read/Grep/Glob run collapsing (stage 24.4). Renders a
- * ConversationView whose assistant turn calls 4 Reads + 2 Greps in a row; they
- * should collapse into a single grouped card, while a lone Edit stays its own
- * card.
+ * Visual smoke for the read/search collapse + Bash semantic labels.
+ *
+ * Turn 1 — a mixed run of Reads, Greps, Bash inspection commands (ls/cat/rg),
+ * an MCP query and a MemoryWrite collapse into ONE grouped card with a
+ * semantic summary ("Searched … · Read … · Listed … · Queried …"), while a
+ * lone Edit stays its own card.
+ *
+ * Turn 2 — action Bash commands that are NOT collapsible each render their own
+ * card with a semantic label: Build(npm run build), Test(vitest), Git(status),
+ * Search("foo"), List(ls -la).
  */
 import React from "react";
 import { PassThrough } from "node:stream";
@@ -32,6 +38,11 @@ const messages: MessageParam[] = [
       toolUse("r4", "Read", { file_path: "src/core/agenticLoop.ts" }),
       toolUse("g1", "Grep", { pattern: "TODO" }),
       toolUse("g2", "Grep", { pattern: "FIXME" }),
+      toolUse("b1", "Bash", { command: "ls -la src" }),
+      toolUse("b2", "Bash", { command: "cat README.md" }),
+      toolUse("b3", "Bash", { command: "rg 'collapseReadSearch' src" }),
+      toolUse("m1", "mcp__slack__search", { query: "deploy" }),
+      toolUse("mem1", "MemoryWrite", { file_path: ".easy-agent/memory/notes.md", content: "x" }),
       toolUse("e1", "Edit", { file_path: "src/ui/theme.ts", old_string: "a", new_string: "b" }),
     ] as unknown as MessageParam["content"],
   },
@@ -44,7 +55,33 @@ const messages: MessageParam[] = [
       toolResult("r4", "780 lines"),
       toolResult("g1", "12 matches"),
       toolResult("g2", "3 matches"),
+      toolResult("b1", "STDOUT:\nsrc listing"),
+      toolResult("b2", "STDOUT:\n# README"),
+      toolResult("b3", "STDOUT:\nsrc/x.ts:1:collapseReadSearch"),
+      toolResult("m1", "[]"),
+      toolResult("mem1", "Updated .easy-agent/memory/notes.md"),
       toolResult("e1", "edited"),
+    ] as unknown as MessageParam["content"],
+  },
+  {
+    role: "assistant",
+    content: [
+      { type: "text", text: "Now let me run the action commands." },
+      toolUse("a1", "Bash", { command: "npm run build" }),
+      toolUse("a4", "Bash", { command: "grep -rn \"foo\" src" }),
+      toolUse("a2", "Bash", { command: "vitest run" }),
+      toolUse("a5", "Bash", { command: "ls -la" }),
+      toolUse("a3", "Bash", { command: "git status" }),
+    ] as unknown as MessageParam["content"],
+  },
+  {
+    role: "user",
+    content: [
+      toolResult("a1", "Command: npm run build\nExit code: 0\nSTDOUT:\nbuilt ok"),
+      toolResult("a4", "Command: grep -rn foo src\nExit code: 0\nSTDOUT:\nsrc/a.ts:1:foo"),
+      toolResult("a2", "Command: vitest run\nExit code: 0\nSTDOUT:\n5 passed"),
+      toolResult("a5", "Command: ls -la\nExit code: 0\nSTDOUT:\ntotal 0"),
+      toolResult("a3", "Command: git status\nExit code: 0\nSTDOUT:\nclean"),
     ] as unknown as MessageParam["content"],
   },
 ];

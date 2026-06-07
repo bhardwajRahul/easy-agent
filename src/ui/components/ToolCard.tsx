@@ -17,24 +17,46 @@ import { theme, glyph } from "../theme.js";
 import { useBlink } from "../hooks/useBlink.js";
 import type { ToolLine } from "../utils/toolCardFormat.js";
 
-type ToolState = "pending" | "ok" | "error";
+/**
+ * The tool-card lifecycle, mirroring source's AssistantToolUseMessage states:
+ *   - queued             → emitted but not started (static dim dot)
+ *   - running            → actively executing (blinking dot)  [alias: pending]
+ *   - waiting-permission → blocked on the user's approval (blinking dot)
+ *   - classifier         → Auto-mode safety check in flight (blinking dot)
+ *   - ok / error         → resolved (solid green / red dot)
+ */
+export type ToolState =
+  | "queued"
+  | "pending"
+  | "running"
+  | "waiting-permission"
+  | "classifier"
+  | "ok"
+  | "error";
+
+/** The three "in flight, working" states whose dot blinks. */
+function isActive(state: ToolState): boolean {
+  return state === "pending" || state === "running" || state === "waiting-permission" || state === "classifier";
+}
 
 function dotColor(state: ToolState): string {
   switch (state) {
-    case "pending":
-      return theme.brand; // warm orange while running (matches the spinner)
+    case "queued":
+      return theme.muted; // not started yet — muted, no blink
     case "error":
       return theme.error;
-    default:
+    case "ok":
       return theme.ok;
+    default:
+      return theme.brand; // warm orange while working (matches the spinner)
   }
 }
 
 /**
  * One-line tool header: `● Label(target)`. The status dot occupies a 2-col
  * gutter (dot + space) so result lines align under the label. While the tool
- * is still running the dot blinks (shared clock, see useBlink) — same as
- * source's ToolUseLoader.
+ * is actively working the dot blinks (shared clock, see useBlink); a queued
+ * card shows a steady dim dot — same model as source's ToolUseLoader.
  */
 export function ToolCardHeader({
   line,
@@ -43,8 +65,8 @@ export function ToolCardHeader({
   line: ToolLine;
   state: ToolState;
 }): React.ReactNode {
-  const blinkOn = useBlink(state === "pending");
-  const dotChar = state === "pending" && !blinkOn ? " " : glyph.toolDot;
+  const blinkOn = useBlink(isActive(state));
+  const dotChar = isActive(state) && !blinkOn ? " " : glyph.toolDot;
   return (
     <Box>
       <Text color={dotColor(state)}>{`${dotChar} `}</Text>

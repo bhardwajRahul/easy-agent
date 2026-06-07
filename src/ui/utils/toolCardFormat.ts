@@ -9,6 +9,7 @@
 
 import path from "node:path";
 import { diffStats } from "./diffFormat.js";
+import { classifyBashLabel, shortenCommand } from "./toolClassify.js";
 
 const MAX_ERROR_LINES = 12;
 const MAX_ERROR_CHARS = 2000;
@@ -65,10 +66,9 @@ function globStat(result: string): string | undefined {
   return n > 0 ? `${n} file${n === 1 ? "" : "s"}` : undefined;
 }
 
-/** Collapse whitespace and truncate a shell command for the header line. */
-function shortenCommand(cmd: string, max = 72): string {
-  const oneLine = cmd.replace(/\s+/g, " ").trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+/** Strip the model-only `<sandbox_violations>…</sandbox_violations>` block. */
+function stripSandboxViolations(text: string): string {
+  return text.replace(/<sandbox_violations>[\s\S]*?<\/sandbox_violations>/g, "").trim();
 }
 
 /**
@@ -76,9 +76,12 @@ function shortenCommand(cmd: string, max = 72): string {
  * the `Command:/Read-only:/Sandbox:/Exit code:` metadata header and the
  * STDOUT:/STDERR: section labels, and stripping the model-only
  * <sandbox_violations> tag. Returns the trimmed body (may be empty).
+ *
+ * Kept for callers that just want a single merged blob; richer rendering
+ * uses `parseBashResult` to keep stdout and stderr on separate layers.
  */
 export function extractBashOutput(content: string): string {
-  const withoutTag = content.replace(/<sandbox_violations>[\s\S]*?<\/sandbox_violations>/g, "").trim();
+  const withoutTag = stripSandboxViolations(content);
   const lines = withoutTag.split("\n");
   const body: string[] = [];
   let capturing = false;
@@ -91,6 +94,90 @@ export function extractBashOutput(content: string): string {
     if (capturing) body.push(line);
   }
   return body.join("\n").trim();
+}
+
+/**
+ * Structured view of a Bash tool_result, separating stdout, stderr and the
+ * exceptional states (timeout / abort / spawn failure / sandbox violation) so
+ * the UI can render each on its own visual layer. Mirrors source's
+ * `BashToolResultMessage` split (stdout default, stderr `isError`, warnings
+ * dim, sandbox tags stripped before display).
+ */
+export interface BashResult {
+  /** Original command, when present in the metadata header. */
+  command?: string;
+  stdout: string;
+  /** stderr with `<sandbox_violations>` stripped for human display. */
+  stderr: string;
+  exitCode?: number;
+  /** Set when the command timed out (carries a human message to show). */
+  timeoutMessage?: string;
+  /** A non-structured error (abort, spawn failure) — shown as-is. */
+  errorMessage?: string;
+  /** True when stderr carried a `<sandbox_violations>` block (now stripped). */
+  hadSandboxViolation: boolean;
+}
+
+/** Parse a Bash/PowerShell tool_result `content` into its structured layers. */
+export function parseBashResult(content: string): BashResult {
+  const trimmed = content.trim();
+
+  // Non-structured failures emitted by bashTool before/around spawn.
+  const timeout = trimmed.match(/^Command timed out after (\d+)ms/);
+  if (timeout) {
+    const ms = Number(timeout[1]);
+    const secs = Number.isFinite(ms) ? Math.round(ms / 1000) : undefined;
+    return {
+      stdout: "",
+      stderr: "",
+      hadSandboxViolation: false,
+      timeoutMessage: secs !== undefined ? `Timed out after ${secs}s` : "Timed out",
+    };
+  }
+  const hasStructure = /^(Command|Exit code): /m.test(trimmed) || /^STDOUT:$/m.test(trimmed);
+  if (!hasStructure) {
+    return { stdout: "", stderr: "", hadSandboxViolation: false, errorMessage: trimmed };
+  }
+
+  const lines = content.split("\n");
+  let command: string | undefined;
+  let exitCode: number | undefined;
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  let section: "stdout" | "stderr" | null = null;
+  for (const line of lines) {
+    if (line === "STDOUT:") {
+      section = "stdout";
+      continue;
+    }
+    if (line === "STDERR:") {
+      section = "stderr";
+      continue;
+    }
+    const cmd = line.match(/^Command: (.*)$/);
+    if (cmd && section === null) {
+      command = cmd[1];
+      continue;
+    }
+    const code = line.match(/^Exit code: (-?\d+)$/);
+    if (code && section === null) {
+      exitCode = Number(code[1]);
+      continue;
+    }
+    if (/^(Read-only|Sandbox): /.test(line) && section === null) continue;
+    if (section === "stdout") stdout.push(line);
+    else if (section === "stderr") stderr.push(line);
+  }
+
+  const rawStderr = stderr.join("\n");
+  const cleanedStderr = stripSandboxViolations(rawStderr);
+  return {
+    command,
+    stdout: stdout.join("\n").trim(),
+    stderr: cleanedStderr,
+    exitCode,
+    hadSandboxViolation: rawStderr.includes("<sandbox_violations>"),
+  };
 }
 
 /** Parse the `Exit code: N` line from a Bash/PowerShell result, if present. */
@@ -179,10 +266,13 @@ export function summarizeTool(
       return { label: "Glob", target: asString(inp.pattern), stat: result ? globStat(result) : undefined };
     case "Bash": {
       const cmd = asString(inp.command);
-      const target = cmd ? shortenCommand(cmd) : undefined;
+      // Classify the command into a semantic label (Build/Test/Git/Search/
+      // List) so a wall of Bash cards reads as recognizable actions; falls
+      // back to a plain `Bash(command)`.
+      const { label, target } = cmd ? classifyBashLabel(cmd) : { label: "Bash", target: undefined };
       const code = result ? bashExitCode(result) : undefined;
       const stat = code !== undefined && code !== 0 ? `exit ${code}` : undefined;
-      return { label: "Bash", target, stat };
+      return { label, target, stat };
     }
     case "PowerShell": {
       const cmd = asString(inp.command);

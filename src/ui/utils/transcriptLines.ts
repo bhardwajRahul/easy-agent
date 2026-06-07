@@ -26,11 +26,12 @@ import {
 } from "../components/ConversationView.js";
 import { computeDiffLines } from "./diffFormat.js";
 import {
-  extractBashOutput,
   formatErrorBody,
+  parseBashResult,
   summarizeTool,
   type ToolLine,
 } from "./toolCardFormat.js";
+import { isSilentBashCommand } from "./toolClassify.js";
 
 const paint = {
   assistant: chalk.hex(theme.assistant),
@@ -39,6 +40,7 @@ const paint = {
   muted: chalk.hex(theme.muted),
   ok: chalk.hex(theme.ok),
   error: chalk.hex(theme.error),
+  warn: chalk.hex(theme.warn),
 };
 
 const CORNER = `  ${glyph.resultCorner} `; // "  ⎿ "
@@ -64,17 +66,41 @@ function pushToolLines(out: string[], name: string, input: Record<string, unknow
   const line = summarizeTool(name, input, result.content);
   out.push(toolHeader(line, result.isError));
 
-  // Bash → full stdout/stderr under the corner.
-  if (name === "Bash") {
-    const output = extractBashOutput(result.content);
-    if (!output) {
-      out.push(toolSummary(line));
+  // Bash/PowerShell → full stdout (dim) + stderr (red) layered under the
+  // corner, plus timeout / no-output states. Transcript is the verbose view,
+  // so nothing is capped here.
+  if (name === "Bash" || name === "PowerShell") {
+    const parsed = parseBashResult(result.content);
+    if (parsed.timeoutMessage) {
+      out.push(paint.muted(CORNER) + paint.warn(parsed.timeoutMessage));
       return;
     }
-    const color = result.isError ? paint.error : paint.muted;
-    const lines = output.split("\n");
-    out.push(paint.muted(CORNER) + color(lines[0] ?? ""));
-    for (let i = 1; i < lines.length; i++) out.push(BODY_INDENT + color(lines[i] ?? ""));
+    const hasStdout = parsed.stdout.length > 0;
+    const hasStderr = parsed.stderr.length > 0;
+    if (!hasStdout && !hasStderr) {
+      if (parsed.errorMessage) {
+        const lines = parsed.errorMessage.split("\n");
+        out.push(paint.muted(CORNER) + paint.error(lines[0] ?? ""));
+        for (let i = 1; i < lines.length; i++) out.push(BODY_INDENT + paint.error(lines[i] ?? ""));
+        return;
+      }
+      if (parsed.hadSandboxViolation) {
+        out.push(paint.muted(CORNER) + paint.warn("Blocked by sandbox"));
+        return;
+      }
+      const silent = parsed.command ? isSilentBashCommand(parsed.command) : false;
+      out.push(paint.muted(CORNER + (silent ? "Done" : "(No output)")));
+      return;
+    }
+    let first = true;
+    const emit = (text: string, color: (s: string) => string) => {
+      for (const l of text.split("\n")) {
+        out.push((first ? paint.muted(CORNER) : BODY_INDENT) + color(l));
+        first = false;
+      }
+    };
+    if (hasStdout) emit(parsed.stdout, paint.muted);
+    if (hasStderr) emit(parsed.stderr, paint.error);
     return;
   }
 
