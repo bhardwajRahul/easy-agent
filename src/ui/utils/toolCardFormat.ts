@@ -9,7 +9,13 @@
 
 import path from "node:path";
 import { diffStats } from "./diffFormat.js";
-import { classifyBashLabel, shortenCommand } from "./toolClassify.js";
+import {
+  classifyBashLabel,
+  classifyToolForCollapse,
+  mcpServerNameOf,
+  shortenCommand,
+  type CollapsedCounts,
+} from "./toolClassify.js";
 
 const MAX_ERROR_LINES = 12;
 const MAX_ERROR_CHARS = 2000;
@@ -26,6 +32,16 @@ export interface ToolLine {
   stat?: string;
   added?: number;
   removed?: number;
+}
+
+/**
+ * A committed tool_result, reduced to what the UI needs to render a card.
+ * Lives here (React-free) so both the renderer registry and the string-based
+ * transcript can share it without importing Ink components.
+ */
+export interface ToolResultInfo {
+  content: string;
+  isError: boolean;
 }
 
 function asString(value: unknown): string | undefined {
@@ -319,6 +335,78 @@ export function formatErrorBody(raw: string): string {
     return keep.join("\n");
   }
   return text;
+}
+
+/** A tool call reduced to what the collapse aggregator needs. */
+export interface CollapseInput {
+  name: string;
+  input: Record<string, unknown> | undefined;
+  /** Optional result content (only history cards have it; live cards don't). */
+  result?: string;
+}
+
+/**
+ * Aggregate a run of collapsible read/search/list/MCP/memory calls into the
+ * counts that feed `getCollapsedSummaryText`, plus the ordered list of targets
+ * (file paths / patterns) for the `⎿` preview. Shared by the live grouped card
+ * (ToolCallList) and the archived grouped card (ConversationView) so both views
+ * count the same way (reads dedupe by file path; bare bash reads count as ops).
+ */
+export function computeCollapsedCounts(members: CollapseInput[]): {
+  counts: CollapsedCounts;
+  targets: string[];
+} {
+  const readFilePaths = new Set<string>();
+  const mcpServers = new Set<string>();
+  let searchCount = 0;
+  let readOps = 0;
+  let listCount = 0;
+  let mcpCount = 0;
+  let memoryWriteCount = 0;
+  const targets: string[] = [];
+
+  for (const m of members) {
+    const kind = classifyToolForCollapse(m.name, m.input);
+    const line = summarizeTool(m.name, m.input, m.result);
+    if (line.target) targets.push(line.target);
+    switch (kind) {
+      case "search":
+        searchCount += 1;
+        break;
+      case "list":
+        listCount += 1;
+        break;
+      case "read": {
+        const filePath = typeof m.input?.file_path === "string" ? (m.input.file_path as string) : undefined;
+        if (filePath) readFilePaths.add(filePath);
+        else readOps += 1; // bash cat/head/… — no path to dedupe by
+        break;
+      }
+      case "mcp": {
+        mcpCount += 1;
+        const server = mcpServerNameOf(m.name, m.input);
+        if (server) mcpServers.add(server);
+        break;
+      }
+      case "memoryWrite":
+        memoryWriteCount += 1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return {
+    counts: {
+      searchCount,
+      readCount: readFilePaths.size + readOps,
+      listCount,
+      mcpCount,
+      memoryWriteCount,
+      mcpServerName: mcpServers.size === 1 ? [...mcpServers][0] : undefined,
+    },
+    targets,
+  };
 }
 
 /**

@@ -28,6 +28,8 @@ export interface BashProgress {
   totalBytes: number;
   /** Wall-clock start (ms since epoch) — used to derive elapsed. */
   startTime: number;
+  /** Configured timeout (ms) — drives the live `timeout Xs` countdown hint. */
+  timeoutMs?: number;
   /** True once the process has exited. */
   done: boolean;
 }
@@ -76,12 +78,13 @@ export function getBashProgress(toolUseId: string): BashProgress | undefined {
   return store.get(toolUseId);
 }
 
-export function startBashProgress(toolUseId: string): void {
+export function startBashProgress(toolUseId: string, timeoutMs?: number): void {
   store.set(toolUseId, {
     output: "",
     totalLines: 0,
     totalBytes: 0,
     startTime: Date.now(),
+    timeoutMs,
     done: false,
   });
   emit(toolUseId, store.get(toolUseId) ?? null);

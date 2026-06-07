@@ -53,6 +53,17 @@ function dotColor(state: ToolState): string {
 }
 
 /**
+ * The status dot in its 2-col gutter (`● ` / `✗ ` …), colored + blinking by
+ * state. Shared by `ToolCardHeader` and the live collapsed-group card so every
+ * card's leading dot behaves identically — same model as source's ToolUseLoader.
+ */
+export function ToolDot({ state }: { state: ToolState }): React.ReactNode {
+  const blinkOn = useBlink(isActive(state));
+  const dotChar = isActive(state) && !blinkOn ? " " : glyph.toolDot;
+  return <Text color={dotColor(state)}>{`${dotChar} `}</Text>;
+}
+
+/**
  * One-line tool header: `● Label(target)`. The status dot occupies a 2-col
  * gutter (dot + space) so result lines align under the label. While the tool
  * is actively working the dot blinks (shared clock, see useBlink); a queued
@@ -65,11 +76,9 @@ export function ToolCardHeader({
   line: ToolLine;
   state: ToolState;
 }): React.ReactNode {
-  const blinkOn = useBlink(isActive(state));
-  const dotChar = isActive(state) && !blinkOn ? " " : glyph.toolDot;
   return (
     <Box>
-      <Text color={dotColor(state)}>{`${dotChar} `}</Text>
+      <ToolDot state={state} />
       <Text bold>{line.label}</Text>
       {line.target ? <Text color={theme.muted}>{`(${line.target})`}</Text> : null}
     </Box>

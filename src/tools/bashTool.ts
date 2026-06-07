@@ -153,7 +153,7 @@ export const bashTool: Tool = {
     // tool_use id so the UI can show the command's tail while it runs. Only
     // active when an interactive frontend supplied a toolUseId.
     const progressId = context.toolUseId;
-    if (progressId) startBashProgress(progressId);
+    if (progressId) startBashProgress(progressId, timeoutMs);
 
     // Inject the merged `env` setting (trusted sources only) on top of the
     // process environment. Lets users/projects export vars (PATH additions,

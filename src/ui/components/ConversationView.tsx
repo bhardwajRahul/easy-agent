@@ -1,61 +1,17 @@
 import React from "react";
 import { Box, Text, useStdout } from "ink";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
-import { formatErrorBody, parseBashResult, summarizeTool } from "../utils/toolCardFormat.js";
-import {
-  classifyToolForCollapse,
-  getCollapsedSummaryText,
-  isSilentBashCommand,
-  mcpServerNameOf,
-} from "../utils/toolClassify.js";
+import { computeCollapsedCounts, type ToolResultInfo } from "../utils/toolCardFormat.js";
+import { classifyToolForCollapse, getCollapsedSummaryText } from "../utils/toolClassify.js";
 import { Markdown } from "../markdown/Markdown.js";
-import { StructuredDiff } from "./StructuredDiff.js";
-import { ResultLine, ToolCardHeader, ToolResultSummary } from "./ToolCard.js";
+import { ResultLine } from "./ToolCard.js";
+import { renderInlineToolCard } from "./toolRenderers.js";
 import { theme, glyph } from "../theme.js";
 
-// Safety cap on how many output lines a verbose Bash card prints, so a runaway
-// command (npm install, a 50k-line log) can't blow up the frame.
-const BASH_VERBOSE_MAX_LINES = 200;
-// Default (condensed) cap — mirrors source's OutputLine MAX_LINES_TO_SHOW so
-// the inline history stays an activity stream; the full output lives in the
-// Ctrl+O transcript.
-const BASH_DEFAULT_MAX_LINES = 3;
-
-/** First non-empty line of a block of text (the condensed one-liner). */
-function firstLine(text: string): string {
-  for (const line of text.split("\n")) {
-    if (line.trim()) return line;
-  }
-  return text.split("\n")[0] ?? "";
-}
-
-/**
- * Column of output lines (no gutter) — meant to sit inside a <ResultLine>,
- * which supplies the dimmed `⎿` corner. Caps at `max` with a "+N more" footer.
- */
-function OutputBody({
-  text,
-  color,
-  max = Infinity,
-}: {
-  text: string;
-  color?: string;
-  max?: number;
-}): React.ReactNode {
-  const lines = text.split("\n");
-  const shown = Number.isFinite(max) ? lines.slice(0, max) : lines;
-  const hidden = lines.length - shown.length;
-  return (
-    <>
-      {shown.map((line, i) => (
-        <Text key={i} color={color ?? theme.muted}>{line || " "}</Text>
-      ))}
-      {hidden > 0 ? (
-        <Text color={theme.muted}>{`… +${hidden} more line${hidden === 1 ? "" : "s"}`}</Text>
-      ) : null}
-    </>
-  );
-}
+// Re-exported for back-compat: ToolResultInfo now lives (React-free) in
+// toolCardFormat so the renderer registry and the string transcript can share
+// it. Existing importers (transcriptLines, etc.) keep importing it from here.
+export type { ToolResultInfo };
 
 /**
  * Full-width grey bar behind a user prompt. We set an EXPLICIT pixel width
@@ -89,104 +45,8 @@ function UserMessageBar({
   );
 }
 
-/**
- * One output layer (stdout or stderr) capped at `max` lines, with a
- * `… +N lines (ctrl+o to expand)` footer when truncated. Designed to sit
- * inside a single `<ResultLine>` so stdout and stderr stack under one corner.
- */
-function CappedLines({
-  text,
-  color,
-  max,
-}: {
-  text: string;
-  color: string;
-  max: number;
-}): React.ReactNode {
-  const lines = text.split("\n");
-  const shown = lines.slice(0, max);
-  const hidden = lines.length - shown.length;
-  return (
-    <>
-      {shown.map((line, i) => (
-        <Text key={i} color={color} wrap="truncate-end">{line || " "}</Text>
-      ))}
-      {hidden > 0 ? (
-        <Text key="more" color={theme.muted}>
-          {`… +${hidden} line${hidden === 1 ? "" : "s"} (ctrl+o to expand)`}
-        </Text>
-      ) : null}
-    </>
-  );
-}
-
-/**
- * Layered Bash result body, mirroring source's BashToolResultMessage:
- *   - stdout  → dim (muted)
- *   - stderr  → error (red), with <sandbox_violations> stripped
- *   - timeout → warning
- *   - empty   → "Done" (silent commands) or "(No output)"
- * Default view caps each stream at BASH_DEFAULT_MAX_LINES; verbose (transcript)
- * shows the full output up to the safety cap.
- */
-function BashResultBody({
-  result,
-  verbose,
-}: {
-  result: ToolResultInfo;
-  verbose: boolean;
-}): React.ReactNode {
-  const parsed = parseBashResult(result.content);
-  const max = verbose ? BASH_VERBOSE_MAX_LINES : BASH_DEFAULT_MAX_LINES;
-  const hasStdout = parsed.stdout.length > 0;
-  const hasStderr = parsed.stderr.length > 0;
-
-  if (parsed.timeoutMessage) {
-    return (
-      <ResultLine>
-        <Text color={theme.warn}>{parsed.timeoutMessage}</Text>
-      </ResultLine>
-    );
-  }
-
-  if (!hasStdout && !hasStderr) {
-    if (parsed.errorMessage) {
-      return (
-        <ResultLine>
-          <CappedLines text={parsed.errorMessage} color={theme.error} max={max} />
-        </ResultLine>
-      );
-    }
-    if (parsed.hadSandboxViolation) {
-      return (
-        <ResultLine>
-          <Text color={theme.warn}>{"Blocked by sandbox"}</Text>
-        </ResultLine>
-      );
-    }
-    const silent = parsed.command ? isSilentBashCommand(parsed.command) : false;
-    return (
-      <ResultLine>
-        <Text color={theme.muted}>{silent ? "Done" : "(No output)"}</Text>
-      </ResultLine>
-    );
-  }
-
-  return (
-    <ResultLine>
-      {hasStdout ? <CappedLines text={parsed.stdout} color={theme.muted} max={max} /> : null}
-      {hasStderr ? <CappedLines text={parsed.stderr} color={theme.error} max={max} /> : null}
-    </ResultLine>
-  );
-}
-
 interface ConversationViewProps {
   messages: MessageParam[];
-}
-
-export interface ToolResultInfo {
-  content: string;
-  isError: boolean;
 }
 
 export function isInternalMessage(message: MessageParam): boolean {
@@ -346,145 +206,6 @@ export function buildToolResultMap(messages: MessageParam[]): Map<string, ToolRe
   return map;
 }
 
-/**
- * Inline tool-call card rendered from an assistant message's `tool_use`
- * block. Visual styling deliberately mirrors `ToolCallList` so that a card
- * in-flight and the same card archived in history look identical.
- */
-/**
- * Pull the human-friendly Agent invocation summary out of a tool_use's
- * raw input. Agent calls always have `prompt` + `description` (required
- * by the schema) and an optional `subagent_type`. The input.prompt
- * itself is the full sub-agent task — usually multi-line and noisy —
- * so we deliberately surface only the short description here.
- */
-function summarizeAgentInput(
-  input: Record<string, unknown> | undefined,
-): { agentType: string; description?: string } | null {
-  if (!input || typeof input !== "object") return null;
-  const subagent = typeof input["subagent_type"] === "string" ? input["subagent_type"] : "general-purpose";
-  const description = typeof input["description"] === "string" ? input["description"] : undefined;
-  return { agentType: subagent || "general-purpose", description };
-}
-
-function InlineAgentCard({
-  input,
-  result,
-}: {
-  input: Record<string, unknown> | undefined;
-  result: ToolResultInfo;
-}): React.ReactNode {
-  const summary = summarizeAgentInput(input);
-  const agentType = summary?.agentType ?? "general-purpose";
-  const description = summary?.description;
-  const color = result.isError ? "red" : "green";
-  const glyph = result.isError ? "✗" : "✓";
-
-  return (
-    <Box flexDirection="column" marginLeft={2}>
-      <Box>
-        <Text color={color}>{`  ${glyph} Agent`}</Text>
-        <Text bold color={color}>{`[${agentType}]`}</Text>
-        {description ? <Text>{`  ${description}`}</Text> : null}
-        {result.isError ? <Text color="red">{" — failed"}</Text> : null}
-      </Box>
-      {result.isError && result.content ? (
-        <Box marginLeft={4} flexDirection="column">
-          <Text color="red">{formatErrorBody(result.content)}</Text>
-        </Box>
-      ) : null}
-    </Box>
-  );
-}
-
-function InlineToolCard({
-  name,
-  input,
-  result,
-  verbose,
-}: {
-  name: string;
-  input: Record<string, unknown> | undefined;
-  result: ToolResultInfo;
-  /** Global Ctrl+O verbose flag: false = condensed `⎿` summary only. */
-  verbose: boolean;
-}): React.ReactNode {
-  // Agent calls get the same dedicated rendering as live SubAgentCard,
-  // just without the running spinner — see InlineAgentCard.
-  if (name === "Agent") {
-    return <InlineAgentCard input={input} result={result} />;
-  }
-
-  const line = summarizeTool(name, input, result.content);
-  const state = result.isError ? "error" : "ok";
-
-  // Bash/PowerShell: header shows `Label(command)`; the body layers stdout
-  // (dim), stderr (red), timeout (warning) and empty-output states. Default
-  // caps each stream at a few lines; the full output lives in the transcript.
-  if (name === "Bash" || name === "PowerShell") {
-    return (
-      <Box flexDirection="column">
-        <ToolCardHeader line={line} state={state} />
-        <BashResultBody result={result} verbose={verbose} />
-      </Box>
-    );
-  }
-
-  // Errors (non-Bash): condensed → first error line + hint; verbose → full body.
-  if (result.isError) {
-    const body = formatErrorBody(result.content);
-    const multiLine = body.includes("\n");
-    return (
-      <Box flexDirection="column">
-        <ToolCardHeader line={line} state="error" />
-        {result.content ? (
-          verbose ? (
-            <ResultLine>
-              <OutputBody text={body} color={theme.error} />
-            </ResultLine>
-          ) : (
-            <ResultLine>
-              <Text>
-                <Text color={theme.error}>{firstLine(body)}</Text>
-                {multiLine ? <Text color={theme.muted}>{"  (ctrl+o to expand)"}</Text> : null}
-              </Text>
-            </ResultLine>
-          )
-        ) : (
-          <ToolResultSummary line={line} />
-        )}
-      </Box>
-    );
-  }
-
-  // Edit → colored diff of the old/new fragments. Write (new file) → content
-  // as all-added green lines. Read/Grep/Glob have no richer body, so they
-  // always show just the `⎿` summary. Diff bodies are gated behind verbose.
-  const oldStr = typeof input?.old_string === "string" ? (input.old_string as string) : undefined;
-  const newStr = typeof input?.new_string === "string" ? (input.new_string as string) : undefined;
-  const writeContent = name === "Write" && typeof input?.content === "string" ? (input.content as string) : undefined;
-  const hasDiff = (name === "Edit" && oldStr !== undefined && newStr !== undefined) || writeContent !== undefined;
-
-  return (
-    <Box flexDirection="column">
-      <ToolCardHeader line={line} state="ok" />
-      {verbose && name === "Edit" && oldStr !== undefined && newStr !== undefined ? (
-        <>
-          <ToolResultSummary line={line} />
-          <StructuredDiff oldText={oldStr} newText={newStr} />
-        </>
-      ) : verbose && writeContent !== undefined ? (
-        <>
-          <ToolResultSummary line={line} />
-          <StructuredDiff oldText="" newText={writeContent} />
-        </>
-      ) : (
-        <ToolResultSummary line={line} expandable={hasDiff} />
-      )}
-    </Box>
-  );
-}
-
 // Minimum run length before a sequence of read/search calls collapses, and
 // how many targets to preview under the `⎿` corner.
 const GROUP_MIN = 2;
@@ -515,54 +236,11 @@ function isCollapsibleMember(
  * + greps twice + lists a dir shouldn't print 9 separate cards.
  */
 function GroupedReadSearchCard({ members }: { members: GroupMember[] }): React.ReactNode {
-  const readFilePaths = new Set<string>();
-  const mcpServers = new Set<string>();
-  let searchCount = 0;
-  let readOps = 0;
-  let listCount = 0;
-  let mcpCount = 0;
-  let memoryWriteCount = 0;
-  const targets: string[] = [];
-
-  for (const m of members) {
-    const kind = classifyToolForCollapse(m.name, m.input);
-    const line = summarizeTool(m.name, m.input, m.result.content);
-    if (line.target) targets.push(line.target);
-    switch (kind) {
-      case "search":
-        searchCount += 1;
-        break;
-      case "list":
-        listCount += 1;
-        break;
-      case "read": {
-        const filePath = typeof m.input?.file_path === "string" ? (m.input.file_path as string) : undefined;
-        if (filePath) readFilePaths.add(filePath);
-        else readOps += 1; // bash cat/head/… — no path to dedupe by
-        break;
-      }
-      case "mcp": {
-        mcpCount += 1;
-        const server = mcpServerNameOf(m.name, m.input);
-        if (server) mcpServers.add(server);
-        break;
-      }
-      case "memoryWrite":
-        memoryWriteCount += 1;
-        break;
-      default:
-        break;
-    }
-  }
-
-  const label = getCollapsedSummaryText({
-    searchCount,
-    readCount: readFilePaths.size + readOps,
-    listCount,
-    mcpCount,
-    memoryWriteCount,
-    mcpServerName: mcpServers.size === 1 ? [...mcpServers][0] : undefined,
-  });
+  const { counts, targets } = computeCollapsedCounts(
+    members.map((m) => ({ name: m.name, input: m.input, result: m.result.content })),
+  );
+  // History group is always finalized → past-tense summary.
+  const label = getCollapsedSummaryText(counts, false);
 
   const preview = targets.slice(0, GROUP_TARGET_PREVIEW);
   const hidden = targets.length - preview.length;
@@ -783,7 +461,7 @@ export function flattenConversation(
             items.push({
               key: `tu${block.id}`,
               element: withToolLeadSpacing(
-                <InlineToolCard name={block.name} input={block.input} result={result} verbose={verbose} />,
+                <>{renderInlineToolCard({ name: block.name, input: block.input, result, verbose })}</>,
                 lastVisibleKind,
               ),
             });

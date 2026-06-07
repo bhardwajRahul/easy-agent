@@ -226,22 +226,38 @@ export interface CollapsedCounts {
 }
 
 /**
- * Build the one-line summary for a collapsed read/search group, e.g.
- * "Searched 5 patterns · Read 12 files · Listed 3 directories". Mirrors the
- * phrasing of source's `getSearchReadSummaryText` (past tense; the group is
- * only collapsed once its results have landed).
+ * Build the one-line summary for a collapsed read/search group. Mirrors source's
+ * CollapsedReadSearchContent, which switches tense by whether the group is still
+ * active:
+ *   - active (some calls in flight) → present participle + trailing "…",
+ *     e.g. "Searching 3 patterns · Reading 5 files…"
+ *   - done (all results landed)     → past tense,
+ *     e.g. "Searched 3 patterns · Read 5 files"
+ *
+ * Live grouping (ToolCallList) renders the active variant; the archived history
+ * card (ConversationView) always renders the done variant.
  */
-export function getCollapsedSummaryText(counts: CollapsedCounts): string {
+export function getCollapsedSummaryText(counts: CollapsedCounts, isActive = false): string {
+  const v = (active: string, done: string): string => (isActive ? active : done);
   const parts: string[] = [];
-  if (counts.searchCount > 0) parts.push(`Searched ${plural(counts.searchCount, "pattern", "patterns")}`);
-  if (counts.readCount > 0) parts.push(`Read ${plural(counts.readCount, "file", "files")}`);
-  if (counts.listCount > 0) parts.push(`Listed ${plural(counts.listCount, "directory", "directories")}`);
+  if (counts.searchCount > 0) {
+    parts.push(`${v("Searching", "Searched")} ${plural(counts.searchCount, "pattern", "patterns")}`);
+  }
+  if (counts.readCount > 0) {
+    parts.push(`${v("Reading", "Read")} ${plural(counts.readCount, "file", "files")}`);
+  }
+  if (counts.listCount > 0) {
+    parts.push(`${v("Listing", "Listed")} ${plural(counts.listCount, "directory", "directories")}`);
+  }
   if (counts.mcpCount > 0) {
     const who = counts.mcpServerName ?? "MCP";
-    parts.push(`Queried ${who} ${counts.mcpCount === 1 ? "1 time" : `${counts.mcpCount} times`}`);
+    parts.push(`${v("Querying", "Queried")} ${who} ${counts.mcpCount === 1 ? "1 time" : `${counts.mcpCount} times`}`);
   }
-  if (counts.memoryWriteCount > 0) parts.push(`Wrote ${plural(counts.memoryWriteCount, "memory", "memories")}`);
-  return parts.join(" · ");
+  if (counts.memoryWriteCount > 0) {
+    parts.push(`${v("Writing", "Wrote")} ${plural(counts.memoryWriteCount, "memory", "memories")}`);
+  }
+  const text = parts.join(" · ");
+  return isActive && text ? `${text}…` : text;
 }
 
 // ---------------------------------------------------------------------------
