@@ -30,6 +30,10 @@ import {
 } from "../services/api/providers/providerStream.js";
 import type { ModelProfile } from "../services/api/providers/profile.js";
 import type { StreamRequestParams } from "../services/api/streaming.js";
+import {
+  setSessionEffortLevel,
+  setSessionThinkingConfig,
+} from "../utils/thinking.js";
 
 const GOLDEN_PATH = path.join(
   import.meta.dirname,
@@ -226,6 +230,19 @@ const OAI_LENGTH_STREAM = [
 ];
 const OAI_MINIMAL = [`data: [DONE]\n\n`];
 
+// Responses API stream carrying a reasoning-summary item alongside text —
+// exercises the native reasoning-summary parsing (openaiResponsesNative.ts).
+const OAI_RESPONSES_REASONING_STREAM = [
+  `event: response.created\ndata: {"response":{"id":"resp_test","model":"model-test"}}\n\n`,
+  `event: response.output_item.added\ndata: {"output_index":0,"item":{"type":"reasoning","id":"rs_1"}}\n\n`,
+  `event: response.reasoning_summary_text.delta\ndata: {"output_index":0,"delta":"Thinking it "}\n\n`,
+  `event: response.reasoning_summary_text.delta\ndata: {"output_index":0,"delta":"through."}\n\n`,
+  `event: response.output_item.done\ndata: {"output_index":0,"item":{"type":"reasoning","id":"rs_1"}}\n\n`,
+  `event: response.output_item.added\ndata: {"output_index":1,"item":{"type":"message","id":"msg_1"}}\n\n`,
+  `event: response.output_text.delta\ndata: {"output_index":1,"delta":"Here's the answer."}\n\n`,
+  `event: response.completed\ndata: {"response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":20,"output_tokens_details":{"reasoning_tokens":15}}}}\n\n`,
+];
+
 const GEMINI_RICH_STREAM = [
   `data: {"responseId":"resp-test","candidates":[{"content":{"parts":[{"text":"pondering","thought":true},{"text":"Here you go"},{"functionCall":{"name":"Read","args":{"path":"a.txt"},"id":"call_fixed_1"},"thoughtSignature":"SIG123"}]}}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":4}}\n\n`,
   `data: {"candidates":[{"finishReason":"STOP"}]}\n\n`,
@@ -284,6 +301,44 @@ async function buildRecording(): Promise<string> {
     params: params(IMAGE_MSGS),
     chunks: OAI_MINIMAL,
   }));
+
+  // Stage 34 regression coverage: /effort and /think must reach the wire
+  // (request body) AND the reasoning-summary text must surface as `thinking`
+  // events (response parsing) — see providerStream.ts's isThinkingActive +
+  // openaiResponsesNative.ts.
+  setSessionEffortLevel("high");
+  push("openai-responses / explicit effort → reasoning.effort + summary", await record({
+    name: "openai-responses effort=high",
+    profile: oai("openai-responses", "oair"),
+    params: params(TEXT_MSGS),
+    chunks: OAI_MINIMAL,
+  }));
+  setSessionEffortLevel(undefined);
+
+  setSessionThinkingConfig({ type: "disabled" });
+  push("openai-responses / think off → reasoning.effort=minimal, no summary", await record({
+    name: "openai-responses think off",
+    profile: oai("openai-responses", "oair"),
+    params: params(TEXT_MSGS),
+    chunks: OAI_MINIMAL,
+  }));
+  setSessionThinkingConfig(undefined);
+
+  push("openai-responses / reasoning-summary stream → thinking events", await record({
+    name: "openai-responses reasoning summary",
+    profile: oai("openai-responses", "oair"),
+    params: params(TEXT_MSGS),
+    chunks: OAI_RESPONSES_REASONING_STREAM,
+  }));
+
+  setSessionEffortLevel("high");
+  push("openai-chat / explicit effort → reasoning_effort (top-level)", await record({
+    name: "openai-chat effort=high",
+    profile: oai("openai-chat", "oai"),
+    params: params(TEXT_MSGS),
+    chunks: OAI_MINIMAL,
+  }));
+  setSessionEffortLevel(undefined);
 
   // Gemini --------------------------------------------------------------------
   push("gemini / tool history → contents[]", await record({

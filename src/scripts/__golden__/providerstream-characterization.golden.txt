@@ -262,6 +262,9 @@ body: {
   ],
   "max_output_tokens": 1024,
   "model": "model-test",
+  "reasoning": {
+    "summary": "auto"
+  },
   "stream": true,
   "tools": [
     {
@@ -323,7 +326,174 @@ body: {
   ],
   "max_output_tokens": 1024,
   "model": "model-test",
+  "reasoning": {
+    "summary": "auto"
+  },
   "stream": true
+}
+-- EVENTS --
+{"type":"message_done","stopReason":"end_turn","usage":{"input_tokens":0,"output_tokens":0}}
+-- RESULT --
+{
+  "assistantMessage": {
+    "content": [],
+    "role": "assistant"
+  },
+  "stopReason": "end_turn",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}
+
+### openai-responses / explicit effort → reasoning.effort + summary
+>>> openai-responses effort=high
+-- REQUEST --
+url: https://api.openai.test/v1/responses
+headers: {
+  "authorization": "Bearer <KEY>",
+  "content-type": "application/json"
+}
+body: {
+  "input": [
+    {
+      "content": "Say hello.",
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "model-test",
+  "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+  },
+  "stream": true
+}
+-- EVENTS --
+{"type":"message_done","stopReason":"end_turn","usage":{"input_tokens":0,"output_tokens":0}}
+-- RESULT --
+{
+  "assistantMessage": {
+    "content": [],
+    "role": "assistant"
+  },
+  "stopReason": "end_turn",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}
+
+### openai-responses / think off → reasoning.effort=minimal, no summary
+>>> openai-responses think off
+-- REQUEST --
+url: https://api.openai.test/v1/responses
+headers: {
+  "authorization": "Bearer <KEY>",
+  "content-type": "application/json"
+}
+body: {
+  "input": [
+    {
+      "content": "Say hello.",
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "model-test",
+  "reasoning": {
+    "effort": "minimal"
+  },
+  "stream": true
+}
+-- EVENTS --
+{"type":"message_done","stopReason":"end_turn","usage":{"input_tokens":0,"output_tokens":0}}
+-- RESULT --
+{
+  "assistantMessage": {
+    "content": [],
+    "role": "assistant"
+  },
+  "stopReason": "end_turn",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}
+
+### openai-responses / reasoning-summary stream → thinking events
+>>> openai-responses reasoning summary
+-- REQUEST --
+url: https://api.openai.test/v1/responses
+headers: {
+  "authorization": "Bearer <KEY>",
+  "content-type": "application/json"
+}
+body: {
+  "input": [
+    {
+      "content": "Say hello.",
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 1024,
+  "model": "model-test",
+  "reasoning": {
+    "summary": "auto"
+  },
+  "stream": true
+}
+-- EVENTS --
+{"type":"message_start","messageId":"resp_test"}
+{"type":"thinking_start"}
+{"type":"thinking_delta","thinking":"Thinking it "}
+{"type":"thinking_delta","thinking":"through."}
+{"type":"text","text":"Here's the answer."}
+{"type":"message_done","stopReason":"completed","usage":{"input_tokens":10,"output_tokens":20}}
+-- RESULT --
+{
+  "assistantMessage": {
+    "content": [
+      {
+        "thinking": "Thinking it through.",
+        "type": "thinking"
+      },
+      {
+        "text": "Here's the answer.",
+        "type": "text"
+      }
+    ],
+    "role": "assistant"
+  },
+  "stopReason": "completed",
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 20
+  }
+}
+
+### openai-chat / explicit effort → reasoning_effort (top-level)
+>>> openai-chat effort=high
+-- REQUEST --
+url: https://api.openai.test/v1/chat/completions
+headers: {
+  "authorization": "Bearer <KEY>",
+  "content-type": "application/json"
+}
+body: {
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": "Say hello.",
+      "role": "user"
+    }
+  ],
+  "model": "model-test",
+  "reasoning_effort": "high",
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
 }
 -- EVENTS --
 {"type":"message_done","stopReason":"end_turn","usage":{"input_tokens":0,"output_tokens":0}}
@@ -400,7 +570,10 @@ body: {
     }
   ],
   "generationConfig": {
-    "maxOutputTokens": 1024
+    "maxOutputTokens": 1024,
+    "thinkingConfig": {
+      "includeThoughts": true
+    }
   },
   "systemInstruction": {
     "parts": [
@@ -479,7 +652,10 @@ body: {
     }
   ],
   "generationConfig": {
-    "maxOutputTokens": 1024
+    "maxOutputTokens": 1024,
+    "thinkingConfig": {
+      "includeThoughts": true
+    }
   }
 }
 -- EVENTS --
@@ -524,7 +700,10 @@ body: {
     }
   ],
   "generationConfig": {
-    "maxOutputTokens": 1024
+    "maxOutputTokens": 1024,
+    "thinkingConfig": {
+      "includeThoughts": true
+    }
   },
   "systemInstruction": {
     "parts": [
@@ -536,6 +715,8 @@ body: {
 }
 -- EVENTS --
 {"type":"message_start","messageId":"resp-test"}
+{"type":"thinking_start"}
+{"type":"thinking_delta","thinking":"pondering"}
 {"type":"text","text":"Here you go"}
 {"type":"tool_use_start","id":"call_fixed_1","name":"Read"}
 {"type":"tool_use_input","id":"call_fixed_1","partial_json":"{\"path\":\"a.txt\"}"}
@@ -591,7 +772,10 @@ body: {
     }
   ],
   "generationConfig": {
-    "maxOutputTokens": 1024
+    "maxOutputTokens": 1024,
+    "thinkingConfig": {
+      "includeThoughts": true
+    }
   }
 }
 -- EVENTS --

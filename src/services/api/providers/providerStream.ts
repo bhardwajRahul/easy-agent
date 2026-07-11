@@ -56,6 +56,7 @@ import {
   universalToOpenAIChatMessages,
   universalToOpenAIResponsesInput,
 } from "./openaiTranslate.js";
+import { assembleOpenAIResponses } from "./openaiResponsesNative.js";
 
 // ─── Protocol → llm-bridge provider + endpoint defaults ────────────────────
 
@@ -107,6 +108,20 @@ function resolveOpenAIReasoningEffort(params: StreamRequestParams): string | und
   const thinkingCfg = params.thinking ?? buildDefaultThinkingConfig();
   if (thinkingCfg.type === "disabled") return "minimal";
   return undefined;
+}
+
+/**
+ * Whether extended thinking is active for this request (mirrors the
+ * Anthropic path's `hasThinking` gate). Used only to decide whether to
+ * request a reasoning *summary* on the Responses API — without
+ * `reasoning.summary`, the API returns an opaque reasoning item with no text
+ * at all, so `/think` has no observable effect no matter how the response
+ * stream is parsed. Chat Completions has no summary equivalent and never
+ * returns reasoning content regardless (doc/CURL_EXAMPLES.md §1).
+ */
+function isThinkingActive(params: StreamRequestParams): boolean {
+  const thinkingCfg = params.thinking ?? buildDefaultThinkingConfig();
+  return thinkingCfg.type !== "disabled";
 }
 
 interface PreparedRequest {
@@ -191,7 +206,16 @@ export function prepareRequest(profile: ModelProfile, params: StreamRequestParam
     // Rebuild `input[]` from the universal IR so multi-turn tool calls keep
     // their function_call / function_call_output pairing (llm-bridge drops it).
     body.input = universalToOpenAIResponsesInput(universal);
-    if (reasoningEffort) body.reasoning = { effort: reasoningEffort };
+    const thinkingOn = isThinkingActive(params);
+    if (reasoningEffort || thinkingOn) {
+      body.reasoning = {
+        ...(reasoningEffort ? { effort: reasoningEffort } : {}),
+        // Request a visible reasoning summary — see isThinkingActive's doc
+        // comment for why this is required for `/think` to have any
+        // observable effect on this protocol.
+        ...(thinkingOn ? { summary: "auto" } : {}),
+      };
+    }
   } else {
     // openai-chat: rebuild `messages[]` so tool results become `role:"tool"`
     // messages carrying tool_call_id (llm-bridge mis-emits these).
@@ -356,6 +380,13 @@ export async function* streamViaProvider(
   // llm-bridge's parser discards) — see assembleGemini / parseGeminiNative.
   if (prepared.provider === "google") {
     return yield* assembleGemini(response.body);
+  }
+
+  // Responses API gets a dedicated assembler too — llm-bridge's parser has no
+  // case for the reasoning-summary event stream (see openaiResponsesNative.ts
+  // for why), so `/think` would otherwise have zero visible effect.
+  if (prepared.provider === "openai-responses") {
+    return yield* assembleOpenAIResponses(response.body);
   }
 
   const parse = parserFor(prepared.provider);
