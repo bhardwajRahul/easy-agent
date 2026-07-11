@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { Spinner } from "./Spinner.js";
 import { StreamingMarkdown } from "../markdown/Markdown.js";
+import { AssistantMessageRow } from "./AssistantMessageRow.js";
 import { PlanApprovalDialog } from "./PlanApprovalDialog.js";
 import { PermissionRequestCard } from "./PermissionRequestCard.js";
 import { theme, glyph } from "../theme.js";
@@ -49,10 +50,9 @@ export function StatusBar({
       )}
 
       {isLoading && streamingText && !permissionPrompt && (
-        <Box marginTop={1}>
-          <Text color={theme.assistant}>{`${glyph.assistant} `}</Text>
+        <AssistantMessageRow>
           <StreamingMarkdown content={streamingText} />
-        </Box>
+        </AssistantMessageRow>
       )}
 
       {lastUsage && !isLoading && (

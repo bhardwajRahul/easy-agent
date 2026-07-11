@@ -10,6 +10,7 @@ import {
   AssistantThinkingMessage,
   AssistantRedactedThinkingMessage,
 } from "./AssistantThinkingMessage.js";
+import { AssistantMessageRow } from "./AssistantMessageRow.js";
 import { theme, glyph } from "../theme.js";
 
 // Re-exported for back-compat: ToolResultInfo now lives (React-free) in
@@ -407,10 +408,9 @@ export function flattenConversation(
         items.push({
           key: `a${index}`,
             element: (
-              <Box marginTop={1}>
-                <Text color={theme.assistant}>{`${glyph.assistant} `}</Text>
+              <AssistantMessageRow>
                 <Markdown content={message.content} />
-              </Box>
+              </AssistantMessageRow>
             ),
           });
           lastVisibleKind = "assistantText";
@@ -468,10 +468,9 @@ export function flattenConversation(
             items.push({
               key: `a${index}-t${j}`,
                 element: (
-                  <Box marginTop={1}>
-                    <Text color={theme.assistant}>{`${glyph.assistant} `}</Text>
+                  <AssistantMessageRow>
                     <Markdown content={block.text} />
-                  </Box>
+                  </AssistantMessageRow>
                 ),
               });
               lastVisibleKind = "assistantText";
