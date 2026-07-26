@@ -965,11 +965,26 @@ export function useAgentSession({
               total: value.totalUsage,
             });
             break;
+          case "command_progress":
+            // Long-running local commands (plugin install/update/marketplace
+            // operations) yield before their first await. Enter a real busy
+            // state so Ink has both an immediate frame and an active animation
+            // source; this also guarantees the final command result repaints
+            // when busy flips back to false.
+            setIsLoading(true);
+            setSpinnerLabel(value.spinnerLabel);
+            setSystemNotice({
+              tone: "info",
+              title: value.title,
+              body: value.message,
+            });
+            break;
           case "command":
             // Slash-command output is a blocking panel: it pins above the
             // input, suppresses typing, and waits for Esc — matching Claude's
             // local-jsx commands. (Skill / user prompt commands never reach
             // here; they expand into a model turn, so they stay non-blocking.)
+            setIsLoading(false);
             setSystemNotice({ ...buildCommandNotice(value.message, value.kind), dismissable: true });
             await appendTranscriptEntry(toolContext.cwd, sessionIdRef.current, {
               type: "system",
@@ -1009,6 +1024,8 @@ export function useAgentSession({
           case "plugin_view":
             // `/plugin` (no args) → interactive plugin/marketplace manager. The
             // overlay applies changes via engine.mutatePlugin().
+            setIsLoading(false);
+            setSystemNotice(null);
             setPluginView(value.data);
             break;
           case "open_editor": {

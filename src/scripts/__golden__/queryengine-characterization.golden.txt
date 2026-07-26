@@ -92,7 +92,7 @@ command[info]:
 command[info]:
   | Model profiles
   |   (none declared — add a `models` block to settings.json)
-  | 
+  |
   | Switch with /model <id>; clear with /model default.
 <<< handled=true
 
@@ -137,7 +137,7 @@ command[info]:
 >>> /status
 command[info]:
   | Status
-  | 
+  |
   | - cwd: <CWD>
   | - Session id: char-session
   | - Model: claude-sonnet-4-20250514 (source: default; default: claude-sonnet-4-20250514)
@@ -154,29 +154,29 @@ command[info]:
 >>> /context
 command[info]:
   | Context usage (claude-sonnet-4-20250514)
-  | 
+  |
   | Context window: 200,000 tokens
-  | 
-  |   System prompt          ░░░░░░░░░░░░░░░░░░░░   0.8%  1,519 tok
+  |
+  |   System prompt          ░░░░░░░░░░░░░░░░░░░░   0.8%  1,564 tok
   |   AGENT.md + memory      ░░░░░░░░░░░░░░░░░░░░   0.0%  4 tok
   |   Tool definitions       █░░░░░░░░░░░░░░░░░░░   3.8%  7,616 tok
   |   Conversation history   ░░░░░░░░░░░░░░░░░░░░   0.0%  42 tok
-  |   Free space             ███████████████████░  95.4%  190,819 tok
-  | 
-  | Estimated used: 9,181 / 200,000 (4.6%)
+  |   Free space             ███████████████████░  95.4%  190,774 tok
+  |
+  | Estimated used: 9,226 / 200,000 (4.6%)
 <<< handled=true
 
 ### doctor
 >>> /doctor
 command[info]:
   | Doctor — environment check
-  | 
+  |
   | ✓ Node.js <NODE>
   | <AUTH_TOKEN>
   |   Endpoint: https://api.anthropic.com
   | <ENDPOINT_PROBE>
   | ✓ MCP: none configured
-  | ✓ Sandbox: sandbox-exec available (enabled)
+  | ✓ Sandbox: sandbox-exec available (disabled in settings)
   | ✓ Settings files valid
   | ✓ Plugins: 0 active, no load errors
 <<< handled=true
@@ -261,7 +261,7 @@ command[info]:
 command[info]:
   | Permission rules
   | - Mode: default
-  | 
+  |
   | [user (~/.easy-agent/settings.json)]
   |   (none)
   | [project (.easy-agent/settings.json)]
@@ -270,7 +270,7 @@ command[info]:
   |   allow  Read
   | [session (this run only, not persisted)]
   |   (none)
-  | 
+  |
   | Usage: /permissions allow <rule>  [--user|--project|--local]
   | Usage: /permissions deny <rule>   [--user|--project|--local]
   | Usage: /permissions remove <rule> [--user|--project|--local]
@@ -292,19 +292,19 @@ permissions_view mode=default allow=1 deny=1
 ### memory
 >>> /memory
 memory_picker (2):
-  1. global AGENT.md (exists)
+  1. global AGENT.md (new)
   2. project AGENT.md (new)
 <<< handled=true
 
 >>> /memory list
 command[info]:
   | Memory files
-  | 
+  |
   |   1. global AGENT.md
-  |      <HOME>/.easy-agent/AGENT.md  (0 B)
+  |      <TMP>/home/.easy-agent/AGENT.md  (missing)
   |   2. project AGENT.md
   |      AGENT.md  (missing)
-  | 
+  |
   | Usage: /memory edit <n>   open a file in $EDITOR (set $EDITOR or $VISUAL)
 <<< handled=true
 
@@ -321,10 +321,9 @@ command[error]:
 >>> /config list
 command[info]:
   | Configuration (effective values + source)
-  |   mcpServers = {}   [user]
-  |   outputStyle = default   [user]
-  |   sandbox = {"enabled":true}   [user]
-  | 
+  |
+  | No settings configured. Use /config set <key> <value> to add one.
+  |
   | Usage: /config get <key>
   | Usage: /config set <key> <value> [--user|--project|--local]
 <<< handled=true
@@ -352,12 +351,12 @@ command[info]:
 command[info]:
   | Output style status
   | - Active: default
-  | 
+  |
   | Available styles:
   |   * default    Default — concise and professional [built-in]
   |     Explanatory    Easy Agent explains its implementation choices and codebase patterns [built-in]
   |     Learning    Easy Agent pauses and asks you to write small pieces of code for hands-on practice [built-in]
-  | 
+  |
   | Usage: /output-style <name> to switch (e.g. /output-style Explanatory)
   | Usage: /output-style default to reset
 <<< handled=true
@@ -366,7 +365,7 @@ command[info]:
 >>> /skills
 command[info]:
   | Skills (0 loaded)
-  | 
+  |
   | No skills found. Add a directory containing SKILL.md to:
   |   ~/.easy-agent/skills/<name>/SKILL.md   (user-wide)
   |   .easy-agent/skills/<name>/SKILL.md     (project-only)
@@ -376,7 +375,7 @@ command[info]:
 >>> /agents
 command[info]:
   | Agents (0 loaded)
-  | 
+  |
   | No agents registered. Built-ins should always be present — if you see
   | this, the bootstrap may have failed; check the startup logs.
   | Add custom agents under:
@@ -388,12 +387,12 @@ command[info]:
 >>> /hooks
 command[info]:
   | Hooks configuration
-  | 
-  | User-scope file:    <HOME>/.easy-agent/settings.json
+  |
+  | User-scope file:    <TMP>/home/.easy-agent/settings.json
   | Project-scope file: <CWD>/.easy-agent/settings.json
-  | 
+  |
   | No hooks configured. To add one, edit the user or project file above:
-  | 
+  |
   |   {
   |     "hooks": {
   |       "PreToolUse": [
@@ -403,9 +402,9 @@ command[info]:
   |       ]
   |     }
   |   }
-  | 
+  |
   | Six events are supported: PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop, SubagentStop
-  | 
+  |
   | Hook contract:
   |   - stdin = JSON event payload
   |   - exit 0 + stdout text   → injected as additionalContext (for some events)
@@ -417,7 +416,7 @@ command[info]:
 >>> /mcp
 command[info]:
   | MCP Servers (0 configured)
-  | 
+  |
   | No MCP servers configured. Add them under "mcpServers" in:
   |   ~/.easy-agent/settings.json   (user-wide)
   |   .easy-agent/settings.json      (project-only)

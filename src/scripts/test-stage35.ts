@@ -26,6 +26,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { CommandContext } from "../core/queryEngine/commands/context.js";
 
 // ── Point HOME at a sandbox BEFORE importing anything that resolves paths. ──
 const SANDBOX_HOME = await fs.mkdtemp(path.join(os.tmpdir(), "ea-stage35-home-"));
@@ -67,6 +68,7 @@ const { setMcpRegistryEntry, getMcpRegistryEntry } = await import("../services/m
 const { trustProject, resetGlobalStateCache } = await import("../config/globalState.js");
 const { detectRisks } = await import("../ui/trustGate.js");
 const { gitClone, gitUpdate, gitHeadCommit } = await import("../plugins/git.js");
+const { handlePluginCommand } = await import("../core/queryEngine/commands/plugin.js");
 const execFileAsync = promisify(execFile);
 
 // ─── tiny assert harness ──────────────────────────────────────────────
@@ -363,6 +365,39 @@ async function main(): Promise<void> {
   const resolved = await marketplace.resolvePlugin("demo@testmp");
   assert(resolved.pluginSource.kind === "local", "resolvePlugin → local source");
   await assertThrows(() => marketplace.resolvePlugin("nope@testmp"), "resolve unknown plugin throws");
+
+  const commandContext: CommandContext = {
+    cwd: projectCwd,
+    sessionId: "stage35-command-progress",
+    defaultModel: "test-model",
+    getMessages: () => [],
+    getTotalUsage: () => ({ input_tokens: 0, output_tokens: 0 }),
+    getActiveModel: () => "test-model",
+    getModelSource: () => "default",
+    getPermissionMode: () => "default",
+    getPrePlanMode: () => null,
+    applyRestoredSession: () => {},
+    getPermissionSettings: () => undefined,
+    getSessionPermissionRules: () => ({ allow: [], deny: [] }),
+    reloadPermissionSettings: async () => {},
+  };
+  const marketplaceUpdateRun = handlePluginCommand(
+    commandContext,
+    ["marketplace", "update", "testmp"],
+  );
+  const progressEvent = await marketplaceUpdateRun.next();
+  assert(
+    !progressEvent.done && progressEvent.value.type === "command_progress",
+    "marketplace mutation yields progress before its asynchronous work",
+  );
+  const resultEvent = await marketplaceUpdateRun.next();
+  assert(
+    !resultEvent.done &&
+      resultEvent.value.type === "command" &&
+      resultEvent.value.message.startsWith("Marketplace updated:"),
+    "marketplace mutation yields its final result without another user input",
+  );
+  await marketplaceUpdateRun.return({ handled: true });
 
   // [5b] Git refs accept raw commit SHAs, not only branch/tag names.
   section("[5b] Git raw-SHA clone/update");

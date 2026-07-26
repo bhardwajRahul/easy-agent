@@ -80,6 +80,11 @@ export interface CommandSuggestion {
   isSelected?: boolean;
   /** Scope tag shown after the name, e.g. "local" (project cmd) or "skill". */
   tag?: string;
+  /**
+   * Selecting this row should complete the input and continue to its next
+   * argument level instead of executing immediately.
+   */
+  completionOnly?: boolean;
 }
 
 /** A `@`-typeahead candidate: a file or directory under the working dir. */

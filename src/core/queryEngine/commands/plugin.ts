@@ -53,6 +53,9 @@ function info(message: string): QueryEngineEvent {
 function error(message: string): QueryEngineEvent {
   return { type: "command", kind: "error", message };
 }
+function progress(title: string, message: string, spinnerLabel = title): QueryEngineEvent {
+  return { type: "command_progress", title, message, spinnerLabel };
+}
 
 /**
  * Classify a marketplace source string: an explicit Git URL, the `owner/repo`
@@ -149,6 +152,7 @@ export async function* handlePluginCommand(
 }
 
 async function* reload(ctx: CommandContext): Yield {
+  yield progress("Reloading plugins", "Rebuilding extension registries and MCP connections…");
   const result = await refreshActivePlugins(ctx.cwd);
   const summary = result.summary;
   const lines = [
@@ -311,6 +315,10 @@ async function* handleMarketplace(ctx: CommandContext, args: string[]): Yield {
         yield error("Usage: /plugin marketplace add <local-path|git-url> [--ref <ref>]");
         return { handled: true };
       }
+      yield progress(
+        "Adding marketplace",
+        `${target}\nValidating the catalog and saving its source…`,
+      );
       const entry = await addMarketplace(await marketplaceSourceFor(target, ctx.cwd, ref));
       yield info(`Marketplace added: ${entry.name} (${entry.source.kind}).`);
       return { handled: true };
@@ -322,6 +330,10 @@ async function* handleMarketplace(ctx: CommandContext, args: string[]): Yield {
           yield info("No marketplaces registered.");
           return { handled: true };
         }
+        yield progress(
+          "Updating marketplaces",
+          `Fetching and validating ${all.length} registered marketplace(s)…`,
+        );
         const updated = [];
         for (const marketplace of all) {
           updated.push(await updateMarketplace(marketplace.name));
@@ -330,6 +342,10 @@ async function* handleMarketplace(ctx: CommandContext, args: string[]): Yield {
         yield info(`Updated ${updated.length} marketplace(s): ${updated.map((entry) => entry.name).join(", ")}.`);
         return { handled: true };
       }
+      yield progress(
+        "Updating marketplace",
+        `${rest[0]}\nFetching and validating the latest catalog…`,
+      );
       const entry = await updateMarketplace(rest[0]);
       await refreshActivePlugins(ctx.cwd);
       yield info(`Marketplace updated: ${entry.name} (${entry.lastUpdated}).`);
@@ -340,6 +356,7 @@ async function* handleMarketplace(ctx: CommandContext, args: string[]): Yield {
         yield error("Usage: /plugin marketplace remove <name>");
         return { handled: true };
       }
+      yield progress("Removing marketplace", `${rest[0]}\nUpdating the marketplace registry…`);
       await removeMarketplace(rest[0]);
       yield info(`Marketplace removed: ${rest[0]}.`);
       return { handled: true };
@@ -412,6 +429,7 @@ async function* install(ctx: CommandContext, args: string[]): Yield {
     yield error("Usage: /plugin install <name[@marketplace]> [--scope user|project|local]");
     return { handled: true };
   }
+  yield progress("Installing plugin", `${ref}\nResolving, validating, and preparing the plugin…`);
   const result = await installPlugin(ref, scope, ctx.cwd);
   await refreshActivePlugins(ctx.cwd);
   const l = result.loaded;
@@ -447,6 +465,10 @@ async function* toggle(ctx: CommandContext, args: string[], on: boolean): Yield 
     );
     return { handled: true };
   }
+  yield progress(
+    on ? "Enabling plugin" : "Disabling plugin",
+    `${id} (${scope})\nRebuilding extension registries…`,
+  );
   await setPluginEnabled(ctx.cwd, id, on, scope);
   const summary = await refreshActivePlugins(ctx.cwd);
   const churn = [
@@ -466,6 +488,7 @@ async function* update(ctx: CommandContext, args: string[]): Yield {
     yield error("Usage: /plugin update <id> [--scope user|project|local]");
     return { handled: true };
   }
+  yield progress("Updating plugin", `${rest[0]}\nResolving and validating the new version…`);
   const result = await updatePlugin(rest[0], scope, ctx.cwd);
   await refreshActivePlugins(ctx.cwd);
   yield info(`Updated ${result.record.pluginId} → v${result.record.version}.`);
@@ -481,6 +504,10 @@ async function* uninstall(ctx: CommandContext, args: string[]): Yield {
     );
     return { handled: true };
   }
+  yield progress(
+    "Uninstalling plugin",
+    `${rest[0]} (${scope})\nRemoving the installation and reloading extensions…`,
+  );
   await uninstallPlugin(rest[0], { keepData, scope, cwd: ctx.cwd });
   await refreshActivePlugins(ctx.cwd);
   yield info(`Uninstalled ${rest[0]}${keepData ? " (data kept)" : ""}.`);

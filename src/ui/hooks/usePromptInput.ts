@@ -15,6 +15,7 @@ import {
   buildDefaultThinkingConfig,
   getSessionEffortLevel,
 } from "../../utils/thinking.js";
+import { getNestedCommandSuggestions } from "../commandPalette.js";
 
 export interface ModeSuggestion {
   key: string;
@@ -692,6 +693,9 @@ export function usePromptInput({
           if (selected.name === "/mode" || selected.name === "/tasks") {
             // Complete to open the inline selector instead of running it bare.
             setInputValue(selected.name + " ");
+          } else if (selected.completionOnly) {
+            // Nested command group/action: reveal its next argument level.
+            setInputValue(selected.name + " ");
           } else {
             // Run the highlighted command in one keystroke.
             handleSubmit(selected.name);
@@ -886,6 +890,10 @@ export function usePromptInput({
   const filteredCommands = useMemo(() => {
     if (!inputValue.startsWith("/")) {
       return [];
+    }
+    const nested = getNestedCommandSuggestions(inputValue);
+    if (nested !== null) {
+      return nested.slice(0, MAX_SUGGESTIONS);
     }
     // Once the user has typed an argument (`/model gpt`), stop suggesting —
     // they've committed to a command and are filling in its arguments.

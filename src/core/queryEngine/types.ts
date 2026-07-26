@@ -179,6 +179,7 @@ export type QueryEngineEvent =
   | { type: "compacted"; summary?: string; trigger: "auto" | "manual" | "micro" }
   | { type: "usage_updated"; totalUsage: Usage; turnUsage: Usage; lastCallUsage: Usage }
   | { type: "token_warning"; warning: TokenWarningResult }
+  | { type: "command_progress"; title: string; message: string; spinnerLabel: string }
   | { type: "command"; message: string; kind: "info" | "error" }
   | { type: "notice"; tone: "info" | "error"; title: string; body: string }
   | { type: "model_changed"; model: string; source: "default" | "session" }

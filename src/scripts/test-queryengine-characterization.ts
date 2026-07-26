@@ -87,13 +87,17 @@ function normalize(text: string): string {
   out = out.replace(/[✓⚠✗] Endpoint (reachable|not reachable)[^\n]*/g, "<ENDPOINT_PROBE>");
   // /doctor: API-auth-token status depends on the ambient environment — collapse it.
   out = out.replace(/[✓✗] (API auth token present|No API auth token)[^\n]*/g, "<AUTH_TOKEN>");
-  return out;
+  // Empty command-output rows are formatted as `"  | "` for readability in
+  // memory, but the golden should not carry invisible trailing whitespace.
+  return out.split("\n").map((line) => line.trimEnd()).join("\n");
 }
 
 // ─── Event formatting ───────────────────────────────────────────────────────
 // Render one event into a stable, human-readable, assertion-friendly block.
 function formatEvent(e: QueryEngineEvent): string {
   switch (e.type) {
+    case "command_progress":
+      return `command_progress ${e.title} [${e.spinnerLabel}]: ${e.message}`;
     case "command":
       return `command[${e.kind}]:\n${indent(e.message)}`;
     case "notice":
@@ -199,6 +203,15 @@ function makeEngine(cwd: string, overrides: Partial<QueryEngineOptions> = {}): Q
 async function buildRecording(): Promise<string> {
   const sections: string[] = [];
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "easy-agent-char-"));
+  // Local slash commands must be characterized against an empty user profile.
+  // Otherwise a developer's ~/.easy-agent/settings.json, plugins, skills, or
+  // agents silently change the golden (installing any plugin used to make this
+  // test fail). Node's os.homedir() observes HOME on POSIX, matching the
+  // isolation strategy used by the stage-specific integration suites.
+  const originalHome = process.env.HOME;
+  const isolatedHome = path.join(tmpRoot, "home");
+  await mkdir(isolatedHome, { recursive: true });
+  process.env.HOME = isolatedHome;
   registerPathReplacement(tmpRoot, "<TMP>");
   registerPathReplacement(os.tmpdir(), "<TMPDIR>");
 
@@ -412,9 +425,12 @@ async function buildRecording(): Promise<string> {
   // unknown command -----------------------------------------------------------
   await section("unknown", async () => [await record(makeEngine(isolatedCwd), "/bogus")]);
 
+  const recording = normalize(sections.join("\n\n"));
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
   await rm(tmpRoot, { recursive: true, force: true });
 
-  return normalize(sections.join("\n\n"));
+  return recording;
 }
 
 async function main(): Promise<void> {
