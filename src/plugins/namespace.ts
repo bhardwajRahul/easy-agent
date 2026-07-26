@@ -51,5 +51,5 @@ export function isNamespaced(name: string): boolean {
  * the existing `mcp__<server>__<tool>` normalizer downstream.)
  */
 export function mcpServerNamespace(pluginName: string, serverName: string): string {
-  return `${pluginName}${NAMESPACE_SEP}${serverName}`;
+  return `plugin${NAMESPACE_SEP}${pluginName}${NAMESPACE_SEP}${serverName}`;
 }

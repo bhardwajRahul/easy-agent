@@ -160,10 +160,19 @@ async function loadFromOneDir(dir: string, source: AgentSource): Promise<LoadedF
     );
     const model = asString(split.raw["model"]);
     const maxTurns = asPositiveInt(split.raw["maxTurns"] ?? split.raw["max_turns"]);
-    const permissionMode = asPermissionMode(
-      split.raw["permissionMode"] ?? split.raw["permission_mode"],
-    );
+    const rawPermissionMode = split.raw["permissionMode"] ?? split.raw["permission_mode"];
+    const permissionMode = source === "plugin" ? undefined : asPermissionMode(rawPermissionMode);
     const isolation = asIsolation(split.raw["isolation"]);
+
+    if (source === "plugin") {
+      for (const field of ["permissionMode", "permission_mode", "hooks", "mcpServers"] as const) {
+        if (split.raw[field] !== undefined) {
+          warnings.push(
+            `[agents] Plugin agent ${fileName} sets '${field}', which is ignored for plugin agents`,
+          );
+        }
+      }
+    }
 
     out.push({
       agentType: name,

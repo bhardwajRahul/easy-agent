@@ -83,6 +83,8 @@ export interface HookCommand {
    * "powershell" too — we omit it for simplicity.
    */
   shell?: "bash" | "sh";
+  /** Extra environment supplied by a plugin/runtime wrapper. */
+  env?: Record<string, string>;
 }
 
 /**
@@ -107,6 +109,9 @@ export interface HookMatcherGroup {
   matcher?: string;
   /** Hooks to run when matcher fires. */
   hooks: HookCommand[];
+  /** Plugin provenance retained through the executable hook layer. */
+  pluginId?: string;
+  pluginRoot?: string;
 }
 
 /** Top-level `hooks` block in settings.json. */

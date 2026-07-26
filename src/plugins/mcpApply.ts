@@ -37,6 +37,13 @@ export interface McpDiff {
   changed: string[];
 }
 
+export interface McpApplyOptions {
+  /** Runtime snapshot generation that owns this reconciliation. */
+  generation?: number;
+  /** False once a newer refresh supersedes this one. */
+  isCurrent?: (generation: number) => boolean;
+}
+
 /** Pure set/JSON diff of two namespaced MCP config maps. */
 export function diffMcpServers(
   applied: Map<string, ScopedMcpServerConfig>,
@@ -68,37 +75,54 @@ function refreshGlobalToolRegistry(): void {
 export async function applyPluginMcpDiff(
   applied: Map<string, ScopedMcpServerConfig>,
   desired: Map<string, ScopedMcpServerConfig>,
+  options: McpApplyOptions = {},
 ): Promise<{ started: string[]; stopped: string[] }> {
   const { added, removed, changed } = diffMcpServers(applied, desired);
+  const generation = options.generation ?? 0;
+  const isCurrent = (): boolean => options.isCurrent?.(generation) ?? true;
 
-  const stopped: string[] = [];
-  for (const name of [...removed, ...changed]) {
-    const cfg = applied.get(name);
-    if (cfg) {
-      try {
-        await clearServerCache(name, cfg);
-      } catch (error) {
-        debugLog("plugins", `[mcp] cleanup failed for ${name}: ${(error as Error).message}`);
+  const stopNames = [...removed, ...changed];
+  const stopResults = await Promise.all(
+    stopNames.map(async (name) => {
+      const cfg = applied.get(name);
+      if (cfg) {
+        try {
+          await clearServerCache(name, cfg);
+        } catch (error) {
+          debugLog("plugins", `[mcp] cleanup failed for ${name}: ${(error as Error).message}`);
+        }
       }
-    }
-    deleteMcpRegistryEntry(name);
-    stopped.push(name);
-  }
+      if (isCurrent()) {
+        deleteMcpRegistryEntry(name);
+        return true;
+      }
+      return false;
+    }),
+  );
+  const stopped = stopNames.filter((_, index) => stopResults[index]);
 
-  const started: string[] = [];
-  for (const name of [...added, ...changed]) {
-    const cfg = desired.get(name);
-    if (!cfg) continue;
-    try {
-      const connection = await connectToServer(name, cfg);
-      const tools = connection.type === "connected" ? await fetchToolsForConnection(connection) : [];
-      setMcpRegistryEntry(name, connection, tools);
-    } catch (error) {
-      debugLog("plugins", `[mcp] connect failed for ${name}: ${(error as Error).message}`);
-    }
-    started.push(name);
-  }
+  const startNames = [...added, ...changed];
+  const startResults = await Promise.all(
+    startNames.map(async (name) => {
+      const cfg = desired.get(name);
+      if (!cfg) return false;
+      try {
+        const connection = await connectToServer(name, cfg);
+        const tools = connection.type === "connected" ? await fetchToolsForConnection(connection) : [];
+        if (!isCurrent()) {
+          await clearServerCache(name, cfg);
+          return false;
+        }
+        setMcpRegistryEntry(name, connection, tools);
+        return true;
+      } catch (error) {
+        debugLog("plugins", `[mcp] connect failed for ${name}: ${(error as Error).message}`);
+        return false;
+      }
+    }),
+  );
+  const started = startNames.filter((_, index) => startResults[index]);
 
-  refreshGlobalToolRegistry();
+  if (isCurrent()) refreshGlobalToolRegistry();
   return { started, stopped };
 }

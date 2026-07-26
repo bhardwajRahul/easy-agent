@@ -20,15 +20,43 @@ import {
 import type { ScopedMcpServerConfig } from "../../../types/mcp.js";
 import type { QueryEngineEvent } from "../types.js";
 import type { CommandContext } from "./context.js";
+import { refreshActivePlugins } from "../../../plugins/runtime.js";
 
 /**
- * Handle `/skills` — read-only listing of every skill the loader picked
- * up at startup, split by visibility (model-visible vs hidden vs
- * conditionally-latent). No subcommands yet — `/skills reload` is
- * deferred to a later stage; users can restart the CLI to pick up
- * SKILL.md edits.
+ * Handle `/skills` — list loaded skills, or atomically reload all extension
+ * registries with `/skills reload`.
  */
-export async function* handleSkillsCommand(): AsyncGenerator<QueryEngineEvent, { handled: boolean }> {
+export async function* handleSkillsCommand(
+  ctx: CommandContext,
+  args: string[] = [],
+): AsyncGenerator<QueryEngineEvent, { handled: boolean }> {
+  if (args[0]?.toLowerCase() === "reload") {
+    const result = await refreshActivePlugins(ctx.cwd);
+    const summary = result.summary;
+    const lines = [
+      `Extensions reloaded: ${summary.enabledPlugins} enabled, ${summary.disabledPlugins} disabled.`,
+      `Skills ${summary.skills} · Commands ${summary.commands} · Agents ${summary.agents} · ` +
+        `Styles ${summary.outputStyles} · Hooks ${summary.hooks} · MCP ${summary.mcpServers} · ` +
+        `Errors ${summary.errors}`,
+    ];
+    if (result.mcpStarted.length > 0) lines.push(`MCP started: ${result.mcpStarted.join(", ")}`);
+    if (result.mcpStopped.length > 0) lines.push(`MCP stopped: ${result.mcpStopped.join(", ")}`);
+    if (summary.errors > 0) {
+      lines.push(`${summary.errors} issue(s) detected; run /doctor for details.`);
+    }
+    yield { type: "command", kind: summary.errors > 0 ? "error" : "info", message: lines.join("\n") };
+    return { handled: true };
+  }
+
+  if (args.length > 0) {
+    yield {
+      type: "command",
+      kind: "error",
+      message: `Unknown /skills subcommand: ${args[0]}. Try /skills or /skills reload.`,
+    };
+    return { handled: true };
+  }
+
   const all = getAllUserInvocableSkills();
   if (all.length === 0) {
     yield {

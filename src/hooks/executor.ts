@@ -85,6 +85,7 @@ async function runShellCommand(
         // their working tree without re-doing process.cwd() (which
         // may differ for sub-agents running in a worktree).
         EASY_AGENT_PROJECT_DIR: cwd,
+        ...(hook.env ?? {}),
       },
       stdio: ["pipe", "pipe", "pipe"],
     });

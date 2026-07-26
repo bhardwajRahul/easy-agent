@@ -14,7 +14,7 @@ import { isProjectTrusted, trustProject } from "../config/globalState.js";
 import { loadSettingSources } from "../config/sources.js";
 
 /** Inspect project + local settings for items worth warning about. */
-async function detectRisks(cwd: string): Promise<string[]> {
+export async function detectRisks(cwd: string): Promise<string[]> {
   const sources = await loadSettingSources(cwd);
   const risks = new Set<string>();
   for (const src of sources) {
@@ -24,6 +24,15 @@ async function detectRisks(cwd: string): Promise<string[]> {
     if (raw["hooks"] && typeof raw["hooks"] === "object") risks.add("lifecycle hooks (run shell commands)");
     if (raw["statusLine"]) risks.add("a custom status line command");
     if (raw["mcpServers"] && typeof raw["mcpServers"] === "object") risks.add("MCP servers");
+    if (
+      raw["enabledPlugins"] &&
+      typeof raw["enabledPlugins"] === "object" &&
+      Object.values(raw["enabledPlugins"] as Record<string, unknown>).some(
+        (value) => value === true,
+      )
+    ) {
+      risks.add("project plugins (may include hooks or MCP servers)");
+    }
     if (raw["mode"] === "auto") risks.add('permission mode "auto" (ignored until trusted)');
     const allow = raw["allow"];
     if (Array.isArray(allow) && allow.some((r) => typeof r === "string" && r.startsWith("Bash("))) {

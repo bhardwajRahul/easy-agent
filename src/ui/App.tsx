@@ -413,6 +413,7 @@ export function App({ model, permissionMode, shouldResume, resumeSessionId }: Ap
               data={state.pluginView}
               active={pluginManagerActive && !state.permissionPrompt && !state.questionPrompt}
               onMutate={actions.pluginMutate}
+              onPreview={actions.pluginPreview}
               onClose={actions.closePlugins}
             />
           ) : null}

@@ -66,6 +66,7 @@ import type {
   PermissionsViewData,
   PluginAvailableRow,
   PluginComponentCounts,
+  PluginComponentNames,
   PluginInstalledRow,
   PluginMarketplaceRow,
   PluginViewData,
@@ -83,6 +84,7 @@ export type {
   PermissionsViewData,
   PluginAvailableRow,
   PluginComponentCounts,
+  PluginComponentNames,
   PluginInstalledRow,
   PluginMarketplaceRow,
   PluginViewData,
@@ -130,8 +132,10 @@ import { handleRewindCommand } from "./queryEngine/commands/rewind.js";
 import {
   handlePluginCommand,
   mutatePlugin as mutatePluginImpl,
+  previewPlugin as previewPluginImpl,
   type PluginMutation,
 } from "./queryEngine/commands/plugin.js";
+import type { PluginInstallPreview } from "../plugins/install.js";
 import { buildPluginView } from "./queryEngine/commands/pluginView.js";
 
 export class QueryEngine {
@@ -405,7 +409,7 @@ export class QueryEngine {
   private tryExpandSkillCommand(
     input: string,
   ): { skill: Skill; markerContent: string; bodyText: string } | null {
-    const match = input.match(/^\/([a-zA-Z0-9_-]+)(?:\s+(.*))?$/);
+    const match = input.match(/^\/([a-zA-Z0-9_:-]+)(?:\s+(.*))?$/);
     if (!match) return null;
     const [, name, rawArgs] = match;
     const skill = findSkill(name);
@@ -846,7 +850,7 @@ export class QueryEngine {
         yield {
           type: "command",
           kind: "info",
-          message: "Commands: /help /clear /config [list|get|set] /cost /model [name|list|default] /mode [default|plan|auto] /think [on|off|<budget>] /effort [low|medium|high|max] /tasks [task|todo|reset] /mcp [tools <name>|reconnect <name>] /plugin [install|enable|disable|marketplace ...] /skills /agents /hooks /output-style [name] /history /compact /rewind [n] /status /context /doctor /copy [n] /export [file] /resume [n|id] /diff [n] /init /permissions [allow|deny|remove <rule>] /memory [edit <n>] /<skill-or-command> [args] /exit /quit /bye",
+          message: "Commands: /help /clear /config [list|get|set] /cost /model [name|list|default] /mode [default|plan|auto] /think [on|off|<budget>] /effort [low|medium|high|max] /tasks [task|todo|reset] /mcp [tools <name>|reconnect <name>] /plugin [install|enable|disable|marketplace|reload ...] /reload-plugins /skills [reload] /agents /hooks /output-style [name] /history /compact /rewind [n] /status /context /doctor /copy [n] /export [file] /resume [n|id] /diff [n] /init /permissions [allow|deny|remove <rule>] /memory [edit <n>] /<skill-or-command> [args] /exit /quit /bye",
         };
         return { handled: true };
       case "config":
@@ -859,11 +863,13 @@ export class QueryEngine {
       case "marketplace":
         // Shorthand for `/plugin marketplace ...` (plan §35.6 alias).
         return yield* handlePluginCommand(this.commandContext(), ["marketplace", ...args]);
+      case "reload-plugins":
+        return yield* handlePluginCommand(this.commandContext(), ["reload"]);
       case "output-style":
       case "output_style":
         return yield* handleOutputStyleCommand(args);
       case "skills":
-        return yield* handleSkillsCommand();
+        return yield* handleSkillsCommand(this.commandContext(), args);
       case "agents":
         return yield* handleAgentsCommand();
       case "hooks":
@@ -1216,6 +1222,11 @@ export class QueryEngine {
    */
   async mutatePlugin(action: PluginMutation): Promise<PluginViewData> {
     return mutatePluginImpl(this.commandContext(), action);
+  }
+
+  /** Validate and describe a plugin package without changing any state. */
+  async previewPlugin(pluginId: string): Promise<PluginInstallPreview> {
+    return previewPluginImpl(pluginId);
   }
 
   /** Rebuild the `/plugin` manager snapshot without changing anything. */

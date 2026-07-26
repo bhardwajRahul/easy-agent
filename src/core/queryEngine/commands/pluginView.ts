@@ -15,6 +15,7 @@ import {
   getActivePlugins,
   getEnabledPluginState,
   listMarketplaces,
+  loadPlugin,
   readInstalledPlugins,
   readMarketplaceManifest,
 } from "../../../plugins/index.js";
@@ -23,6 +24,7 @@ import type { PluginScope } from "../../../plugins/index.js";
 import type {
   PluginAvailableRow,
   PluginComponentCounts,
+  PluginComponentNames,
   PluginInstalledRow,
   PluginMarketplaceRow,
   PluginViewData,
@@ -48,6 +50,27 @@ const EMPTY_COUNTS: PluginComponentCounts = {
   mcpServers: 0,
 };
 
+const EMPTY_NAMES: PluginComponentNames = {
+  skills: [],
+  agents: [],
+  commands: [],
+  outputStyles: [],
+  hooks: [],
+  mcpServers: [],
+};
+
+function authorLabel(author: unknown): string | undefined {
+  if (typeof author === "string") return author;
+  if (
+    author &&
+    typeof author === "object" &&
+    typeof (author as { name?: unknown }).name === "string"
+  ) {
+    return (author as { name: string }).name;
+  }
+  return undefined;
+}
+
 export async function buildPluginView(cwd: string): Promise<PluginViewData> {
   const [installedFile, enableState, marketplaces, trusted] = await Promise.all([
     readInstalledPlugins(),
@@ -56,20 +79,41 @@ export async function buildPluginView(cwd: string): Promise<PluginViewData> {
     isProjectTrusted(cwd),
   ]);
 
-  // Component counts + per-plugin errors only exist for plugins the runtime
-  // actually loaded (i.e. currently enabled); a disabled plugin reports zeros.
+  // Load disabled records too. Parsing a cached plugin is side-effect free and
+  // lets the manager show an accurate component/risk preview before enabling
+  // or updating it.
   const active = new Map(getActivePlugins().map((p) => [p.pluginId, p]));
+  const inspected = new Map(active);
+  await Promise.all(
+    Object.values(installedFile.plugins).map(async (record) => {
+      if (inspected.has(record.pluginId)) return;
+      const loaded = await loadPlugin({
+        root: record.installPath,
+        pluginId: record.pluginId,
+        strict: record.strict !== false,
+        nameHint: record.name,
+        ...(record.componentPaths ? { overlay: record.componentPaths } : {}),
+      }).catch(() => null);
+      if (loaded) inspected.set(record.pluginId, loaded);
+    }),
+  );
+  const runtimeErrors = getActivePluginErrors();
 
   const installed: PluginInstalledRow[] = Object.values(installedFile.plugins)
     .map((record) => {
-      const loaded = active.get(record.pluginId);
+      const loaded = inspected.get(record.pluginId);
       const source = enableState.bySource.get(record.pluginId);
       const scope = asPluginScope(source);
+      const manifest = loaded?.manifest;
       return {
         pluginId: record.pluginId,
         name: record.name,
         marketplace: record.marketplace,
         version: record.version,
+        ...(manifest?.description ? { description: manifest.description } : {}),
+        ...(authorLabel(manifest?.author) ? { author: authorLabel(manifest?.author) } : {}),
+        ...(manifest?.homepage ? { homepage: manifest.homepage } : {}),
+        ...(manifest?.repository ? { repository: manifest.repository } : {}),
         enabled: enableState.enabled.has(record.pluginId),
         ...(scope ? { scope } : {}),
         components: loaded
@@ -82,7 +126,23 @@ export async function buildPluginView(cwd: string): Promise<PluginViewData> {
               mcpServers: loaded.mcpServers.length,
             }
           : { ...EMPTY_COUNTS },
-        errorCount: loaded?.errors.length ?? 0,
+        componentNames: loaded
+          ? {
+              skills: loaded.skills.map((item) => item.name),
+              agents: loaded.agents.map((item) => item.agentType),
+              commands: loaded.commands.map((item) => item.name),
+              outputStyles: loaded.outputStyles.map((item) => item.name),
+              hooks: loaded.hooks.map((item) =>
+                `${item.event}${item.matcher ? `:${item.matcher}` : ""}`,
+              ),
+              mcpServers: loaded.mcpServers.map((item) => item.namespacedName),
+            }
+          : { ...EMPTY_NAMES },
+        hasExecutableComponents: loaded?.hasExecutableComponents ?? false,
+        warnings: loaded?.warnings ?? [],
+        errorCount:
+          (active.has(record.pluginId) ? 0 : (loaded?.errors.length ?? 0)) +
+          runtimeErrors.filter((error) => error.pluginId === record.pluginId).length,
         // Same rule the runtime applies: user-scope enable is the machine
         // owner's own call and always runs; anything else needs folder trust.
         executablesTrusted: source === "user" ? true : trusted,
@@ -132,10 +192,16 @@ export async function buildPluginView(cwd: string): Promise<PluginViewData> {
     installed,
     available,
     marketplaces: marketplaceRows,
-    errors: getActivePluginErrors().map((e) => ({
+    errors: [
+      ...runtimeErrors,
+      ...[...inspected.values()]
+        .filter((plugin) => !active.has(plugin.pluginId))
+        .flatMap((plugin) => plugin.errors),
+    ].map((e) => ({
       pluginId: e.pluginId,
       scope: e.scope,
       message: e.message,
     })),
+    projectTrusted: trusted,
   };
 }

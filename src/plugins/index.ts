@@ -29,6 +29,7 @@ export { resolveInsidePlugin } from "./pathSafety.js";
 export {
   readKnownMarketplaces,
   readInstalledPlugins,
+  loadPluginStateDiagnostics,
 } from "./state.js";
 export {
   getEnabledPluginIds,
@@ -49,10 +50,13 @@ export {
 } from "./marketplace.js";
 export {
   installPlugin,
+  inspectPlugin,
   updatePlugin,
   uninstallPlugin,
   isManagedPluginPath,
   type InstallResult,
+  type InstallOptions,
+  type PluginInstallPreview,
   type UninstallOptions,
 } from "./install.js";
 export {

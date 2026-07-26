@@ -11,6 +11,7 @@ import type {
   PluginViewData,
 } from "../../core/queryEngine.js";
 import type { SettingSource } from "../../config/sources.js";
+import type { PluginInstallPreview } from "../../plugins/install.js";
 import { buildTokenBudgetSnapshot } from "../../utils/tokens.js";
 import {
   appendCompactionSnapshot,
@@ -1317,6 +1318,11 @@ export function useAgentSession({
         if (!engine) return;
         const next = await engine.mutatePlugin(action);
         setPluginView(next);
+      },
+      pluginPreview: async (pluginId: string): Promise<PluginInstallPreview> => {
+        const engine = engineRef.current;
+        if (!engine) throw new Error("Plugin manager is not ready.");
+        return engine.previewPlugin(pluginId);
       },
       permissionMutate: (
         op: "allow" | "deny" | "remove",

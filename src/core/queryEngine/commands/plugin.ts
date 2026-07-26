@@ -8,11 +8,11 @@
  *   /plugin marketplace list
  *   /plugin marketplace update <name>
  *   /plugin marketplace remove <name>
- *   /plugin install <name[@marketplace]> [--project|--local]
- *   /plugin enable  <id> [--project|--local]
- *   /plugin disable <id> [--project|--local]
- *   /plugin update  <id>
- *   /plugin uninstall <id> [--keep-data]
+ *   /plugin install <name[@marketplace]> [--scope user|project|local]
+ *   /plugin enable  <id> [--scope user|project|local]
+ *   /plugin disable <id> [--scope user|project|local]
+ *   /plugin update  <id> [--scope user|project|local]
+ *   /plugin uninstall <id> [--scope user|project|local] [--keep-data]
  *
  * Output is rendered as system notices, never sent to the model. Every
  * mutating subcommand reconciles the live registries via
@@ -28,6 +28,7 @@ import { buildPluginView } from "./pluginView.js";
 import {
   addMarketplace,
   installPlugin,
+  inspectPlugin,
   listMarketplaces,
   readInstalledPlugins,
   refreshActivePlugins,
@@ -41,6 +42,7 @@ import {
   readMarketplaceManifest,
   type MarketplaceSource,
   type PluginScope,
+  type PluginInstallPreview,
 } from "../../../plugins/index.js";
 
 type Yield = AsyncGenerator<QueryEngineEvent, { handled: boolean }>;
@@ -75,14 +77,23 @@ async function marketplaceSourceFor(
   return { kind: "local", path: local };
 }
 
-/** Parse a trailing `--project` / `--local` flag → scope (default user). */
+/** Parse scope flags (`--scope project` or legacy `--project`) → scope. */
 function scopeFromFlags(args: string[]): { scope: PluginScope; rest: string[] } {
   let scope: PluginScope = "user";
   const rest: string[] = [];
-  for (const a of args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i]!;
     if (a === "--project") scope = "project";
     else if (a === "--local") scope = "local";
     else if (a === "--user") scope = "user";
+    else if (a === "--scope") {
+      const value = args[i + 1];
+      if (value !== "user" && value !== "project" && value !== "local") {
+        throw new Error("--scope must be one of: user, project, local");
+      }
+      scope = value;
+      i += 1;
+    }
     else rest.push(a);
   }
   return { scope, rest };
@@ -117,6 +128,8 @@ export async function* handlePluginCommand(
         return yield* toggle(ctx, rest, false);
       case "update":
         return yield* update(ctx, rest);
+      case "reload":
+        return yield* reload(ctx);
       case "uninstall":
       case "remove":
         return yield* uninstall(ctx, rest);
@@ -125,7 +138,7 @@ export async function* handlePluginCommand(
           `Unknown /plugin subcommand: ${sub}. Try /plugin, /plugin list [--available], ` +
             `/plugin install <id>, /plugin validate <path>, ` +
             `/plugin marketplace add <path|url>, /plugin enable|disable <id>, ` +
-            `/plugin update <id>, /plugin uninstall <id>.`,
+            `/plugin update <id>, /plugin uninstall <id>, /plugin reload.`,
         );
         return { handled: true };
     }
@@ -135,16 +148,47 @@ export async function* handlePluginCommand(
   }
 }
 
+async function* reload(ctx: CommandContext): Yield {
+  const result = await refreshActivePlugins(ctx.cwd);
+  const summary = result.summary;
+  const lines = [
+    `Plugins reloaded: ${summary.enabledPlugins} enabled, ${summary.disabledPlugins} disabled.`,
+    `  Skills ${summary.skills} · Commands ${summary.commands} · Agents ${summary.agents} · ` +
+      `Styles ${summary.outputStyles} · Hooks ${summary.hooks} · MCP ${summary.mcpServers} · ` +
+      `Errors ${summary.errors}`,
+  ];
+  if (result.mcpStarted.length > 0) lines.push(`  MCP started: ${result.mcpStarted.join(", ")}`);
+  if (result.mcpStopped.length > 0) lines.push(`  MCP stopped: ${result.mcpStopped.join(", ")}`);
+  if (summary.errors > 0) {
+    lines.push(`  ${summary.errors} issue(s) detected; run /doctor for details.`);
+  }
+  yield summary.errors > 0 ? error(lines.join("\n")) : info(lines.join("\n"));
+  return { handled: true };
+}
+
 /** One action the interactive manager can trigger. */
 export type PluginMutation =
   | { op: "enable"; pluginId: string; scope: PluginScope }
   | { op: "disable"; pluginId: string; scope: PluginScope }
-  | { op: "install"; pluginId: string; scope: PluginScope }
-  | { op: "update"; pluginId: string; scope: PluginScope }
+  | {
+      op: "install";
+      pluginId: string;
+      scope: PluginScope;
+      confirmedExecutableComponents: true;
+      expectedFingerprint: string;
+    }
+  | {
+      op: "update";
+      pluginId: string;
+      scope: PluginScope;
+      confirmedExecutableComponents: true;
+      expectedFingerprint: string;
+    }
   | { op: "uninstall"; pluginId: string; scope: PluginScope }
   | { op: "marketplace-add"; source: string }
   | { op: "marketplace-update"; name: string }
-  | { op: "marketplace-remove"; name: string };
+  | { op: "marketplace-remove"; name: string }
+  | { op: "reload" };
 
 /**
  * Apply one manager action, then reconcile the live registries so the change is
@@ -161,13 +205,19 @@ export async function mutatePlugin(
       await setPluginEnabled(ctx.cwd, action.pluginId, action.op === "enable", action.scope);
       break;
     case "install":
-      await installPlugin(action.pluginId, action.scope);
+      await installPlugin(action.pluginId, action.scope, ctx.cwd, {
+        allowExecutableComponents: action.confirmedExecutableComponents,
+        expectedFingerprint: action.expectedFingerprint,
+      });
       break;
     case "update":
-      await updatePlugin(action.pluginId, action.scope);
+      await updatePlugin(action.pluginId, action.scope, ctx.cwd, {
+        allowExecutableComponents: action.confirmedExecutableComponents,
+        expectedFingerprint: action.expectedFingerprint,
+      });
       break;
     case "uninstall":
-      await uninstallPlugin(action.pluginId, { scope: action.scope });
+      await uninstallPlugin(action.pluginId, { scope: action.scope, cwd: ctx.cwd });
       break;
     case "marketplace-add":
       await addMarketplace(await marketplaceSourceFor(action.source, ctx.cwd));
@@ -178,9 +228,16 @@ export async function mutatePlugin(
     case "marketplace-remove":
       await removeMarketplace(action.name);
       break;
+    case "reload":
+      break;
   }
   await refreshActivePlugins(ctx.cwd);
   return buildPluginView(ctx.cwd);
+}
+
+/** Read-only preflight used by the manager before install/update confirmation. */
+export async function previewPlugin(pluginId: string): Promise<PluginInstallPreview> {
+  return inspectPlugin(pluginId);
 }
 
 async function* listPlugins(ctx: CommandContext, args: string[] = []): Yield {
@@ -260,7 +317,17 @@ async function* handleMarketplace(ctx: CommandContext, args: string[]): Yield {
     }
     case "update": {
       if (!rest[0]) {
-        yield error("Usage: /plugin marketplace update <name>");
+        const all = await listMarketplaces();
+        if (all.length === 0) {
+          yield info("No marketplaces registered.");
+          return { handled: true };
+        }
+        const updated = [];
+        for (const marketplace of all) {
+          updated.push(await updateMarketplace(marketplace.name));
+        }
+        await refreshActivePlugins(ctx.cwd);
+        yield info(`Updated ${updated.length} marketplace(s): ${updated.map((entry) => entry.name).join(", ")}.`);
         return { handled: true };
       }
       const entry = await updateMarketplace(rest[0]);
@@ -342,10 +409,10 @@ async function* install(ctx: CommandContext, args: string[]): Yield {
   const { scope, rest } = scopeFromFlags(args);
   const ref = rest[0];
   if (!ref) {
-    yield error("Usage: /plugin install <name[@marketplace]> [--project|--local]");
+    yield error("Usage: /plugin install <name[@marketplace]> [--scope user|project|local]");
     return { handled: true };
   }
-  const result = await installPlugin(ref, scope);
+  const result = await installPlugin(ref, scope, ctx.cwd);
   await refreshActivePlugins(ctx.cwd);
   const l = result.loaded;
   const parts = [
@@ -375,7 +442,9 @@ async function* toggle(ctx: CommandContext, args: string[], on: boolean): Yield 
   const { scope, rest } = scopeFromFlags(args);
   const id = rest[0];
   if (!id) {
-    yield error(`Usage: /plugin ${on ? "enable" : "disable"} <id> [--project|--local]`);
+    yield error(
+      `Usage: /plugin ${on ? "enable" : "disable"} <id> [--scope user|project|local]`,
+    );
     return { handled: true };
   }
   await setPluginEnabled(ctx.cwd, id, on, scope);
@@ -394,10 +463,10 @@ async function* toggle(ctx: CommandContext, args: string[], on: boolean): Yield 
 async function* update(ctx: CommandContext, args: string[]): Yield {
   const { scope, rest } = scopeFromFlags(args);
   if (!rest[0]) {
-    yield error("Usage: /plugin update <id>");
+    yield error("Usage: /plugin update <id> [--scope user|project|local]");
     return { handled: true };
   }
-  const result = await updatePlugin(rest[0], scope);
+  const result = await updatePlugin(rest[0], scope, ctx.cwd);
   await refreshActivePlugins(ctx.cwd);
   yield info(`Updated ${result.record.pluginId} → v${result.record.version}.`);
   return { handled: true };
@@ -407,10 +476,12 @@ async function* uninstall(ctx: CommandContext, args: string[]): Yield {
   const keepData = args.includes("--keep-data");
   const { scope, rest } = scopeFromFlags(args.filter((a) => a !== "--keep-data"));
   if (!rest[0]) {
-    yield error("Usage: /plugin uninstall <id> [--keep-data] [--project|--local]");
+    yield error(
+      "Usage: /plugin uninstall <id> [--scope user|project|local] [--keep-data]",
+    );
     return { handled: true };
   }
-  await uninstallPlugin(rest[0], { keepData, scope });
+  await uninstallPlugin(rest[0], { keepData, scope, cwd: ctx.cwd });
   await refreshActivePlugins(ctx.cwd);
   yield info(`Uninstalled ${rest[0]}${keepData ? " (data kept)" : ""}.`);
   return { handled: true };

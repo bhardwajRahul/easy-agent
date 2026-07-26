@@ -50,6 +50,7 @@
     "test:stage32": "tsx src/scripts/test-stage32.ts",
     "test:stage33": "tsx src/scripts/test-stage33.ts",
     "test:stage35": "tsx src/scripts/test-stage35.ts",
+    "test:stage35-ui": "tsx src/scripts/test-stage35-ui.tsx",
     "verify:plugin": "tsx src/scripts/verify-plugin-compat.ts",
     "test:filehistory": "tsx src/scripts/smoke-filehistory.ts",
     "test:resilience": "tsx src/scripts/smoke-resilience.ts",

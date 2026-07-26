@@ -185,6 +185,19 @@ export function setActiveOutputStyle(name: string): boolean {
 }
 
 /**
+ * Keep hot reload from leaving a dangling active style. If the selected style
+ * belonged to a plugin that was disabled, removed, or failed to reload, fall
+ * back to the built-in default immediately.
+ *
+ * Returns true when a fallback was applied so callers can surface a diagnostic.
+ */
+export function ensureActiveOutputStyleAvailable(): boolean {
+  if (registry.has(activeStyleName)) return false;
+  activeStyleName = DEFAULT_OUTPUT_STYLE_NAME;
+  return true;
+}
+
+/**
  * The active style as a config — or null when the active style is `default`
  * (or has an empty prompt). buildSystemPrompt uses null to mean "add no
  * output-style section and keep the normal coding instructions".

@@ -87,7 +87,11 @@ async function main(): Promise<void> {
   for (const entry of manifest.plugins) {
     const id = `${entry.name}@${added.name}`;
     try {
-      const result = await installPlugin(id, "user");
+      const result = await installPlugin(id, "user", process.cwd(), {
+        // This verifier runs in an isolated temporary HOME and intentionally
+        // exercises every advertised component, including Hooks/MCP.
+        allowExecutableComponents: true,
+      });
       installedIds.push(id);
       const l = result.loaded;
       const counts =

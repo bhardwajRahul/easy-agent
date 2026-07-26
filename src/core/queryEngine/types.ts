@@ -77,16 +77,32 @@ export interface PluginComponentCounts {
   mcpServers: number;
 }
 
+export interface PluginComponentNames {
+  skills: string[];
+  agents: string[];
+  commands: string[];
+  outputStyles: string[];
+  hooks: string[];
+  mcpServers: string[];
+}
+
 /** An installed plugin, as shown in the manager's "Installed" tab. */
 export interface PluginInstalledRow {
   pluginId: string;
   name: string;
   marketplace: string;
   version: string;
+  description?: string;
+  author?: string;
+  homepage?: string;
+  repository?: string;
   enabled: boolean;
   /** Which settings layer turned it on, when enabled. */
   scope?: PluginScope;
   components: PluginComponentCounts;
+  componentNames: PluginComponentNames;
+  hasExecutableComponents: boolean;
+  warnings: string[];
   errorCount: number;
   /** False when enabled via project/local scope in an untrusted folder. */
   executablesTrusted: boolean;
@@ -119,6 +135,8 @@ export interface PluginViewData {
   available: PluginAvailableRow[];
   marketplaces: PluginMarketplaceRow[];
   errors: { pluginId: string; scope: string; message: string }[];
+  /** Whether project/local executable components may run in this cwd. */
+  projectTrusted: boolean;
 }
 
 /** A single file's unified-patch body, parsed out of `git diff`. */

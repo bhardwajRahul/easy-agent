@@ -64,6 +64,41 @@ async function readJsonSoft<T>(filePath: string): Promise<T | null> {
   }
 }
 
+async function diagnoseStateFile(
+  filePath: string,
+  collectionKey: "marketplaces" | "plugins",
+): Promise<string | null> {
+  let text: string;
+  try {
+    text = await fs.readFile(filePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    return `${filePath}: ${(error as Error).message}`;
+  }
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (parsed.version !== PLUGIN_STATE_VERSION) {
+      return `${filePath}: unsupported state version ${String(parsed.version)}`;
+    }
+    const collection = parsed[collectionKey];
+    if (!collection || typeof collection !== "object" || Array.isArray(collection)) {
+      return `${filePath}: "${collectionKey}" must be an object`;
+    }
+    return null;
+  } catch (error) {
+    return `${filePath}: invalid JSON (${(error as Error).message})`;
+  }
+}
+
+/** Read-only diagnostics for /doctor; normal startup remains fail-soft. */
+export async function loadPluginStateDiagnostics(): Promise<string[]> {
+  const results = await Promise.all([
+    diagnoseStateFile(getKnownMarketplacesPath(), "marketplaces"),
+    diagnoseStateFile(getInstalledPluginsPath(), "plugins"),
+  ]);
+  return results.filter((issue): issue is string => issue !== null);
+}
+
 /**
  * Run `fn` while holding the plugins-root lock. The lock target is a sentinel
  * file (`.lock`) we touch first — proper-lockfile refuses to lock a path that
@@ -80,6 +115,32 @@ export async function withPluginStateLock<T>(fn: () => Promise<T>): Promise<T> {
   const release = await lockfile.lock(sentinel, {
     retries: { retries: 10, factor: 1.5, minTimeout: 20, maxTimeout: 400 },
     stale: 20_000,
+  });
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
+
+/**
+ * Serialize filesystem + state transactions across processes. State-file
+ * writers have their own short lock above; this wider lock prevents two CLI
+ * instances from swapping/removing the same cache or marketplace directory
+ * while either transaction is still validating it.
+ */
+export async function withPluginOperationLock<T>(fn: () => Promise<T>): Promise<T> {
+  await ensurePluginsRoot();
+  const sentinel = path.join(getPluginsRoot(), ".operation.lock");
+  try {
+    await fs.writeFile(sentinel, "", { flag: "wx" });
+  } catch {
+    // Already exists — fine.
+  }
+  const release = await lockfile.lock(sentinel, {
+    retries: { retries: 30, factor: 1.3, minTimeout: 50, maxTimeout: 1_000 },
+    stale: 300_000,
+    update: 10_000,
   });
   try {
     return await fn();

@@ -21,6 +21,7 @@ export const BUILTIN_COMMAND_NAMES = new Set<string>([
   "plugin",
   "plugins",
   "marketplace",
+  "reload-plugins",
   "skills",
   "agents",
   "hooks",

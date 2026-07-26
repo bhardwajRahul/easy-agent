@@ -28,7 +28,7 @@ interface SkillInput {
   args?: string;
 }
 
-const SKILL_NAME_RE = /^[a-zA-Z0-9_-]+$/;
+const SKILL_NAME_RE = /^[a-zA-Z0-9_-]+(?::[a-zA-Z0-9_-]+)*$/;
 
 function readInput(input: Record<string, unknown>): SkillInput {
   const skill = typeof input["skill"] === "string" ? input["skill"].trim() : "";
@@ -92,7 +92,7 @@ export const skillTool: Tool = {
 
     if (!name || !SKILL_NAME_RE.test(name)) {
       return {
-        content: `Error: invalid skill name. Must match /^[a-zA-Z0-9_-]+$/. Got: ${JSON.stringify(name)}`,
+        content: `Error: invalid skill name. Expected a name or plugin:name namespace. Got: ${JSON.stringify(name)}`,
         isError: true,
       };
     }

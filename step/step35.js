@@ -35,7 +35,7 @@ export function splitNamespace(qualified) {
 }
 
 export function mcpServerNamespace(pluginName, serverName) {
-  return `${pluginName}:${serverName}`;
+  return `plugin:${pluginName}:${serverName}`;
 }
 
 // -----------------------------------------------------------------------------
@@ -65,8 +65,9 @@ export function validateComponentPath(rawPath) {
 // -----------------------------------------------------------------------------
 // Plugins reference their own files portably: ${EASY_AGENT_PLUGIN_ROOT} (the
 // install dir, moves per version) and ${EASY_AGENT_PLUGIN_DATA} (a stable,
-// cross-version data dir). Substituted at load time into hook commands + MCP
-// command/args/env so a plugin never hard-codes an absolute path.
+// cross-version data dir). Substituted at load time into component bodies,
+// allowed-tools, hook commands, and MCP command/args/env. Hook/MCP subprocesses
+// receive the same values as real environment variables.
 
 export function substitutePluginVars(value, vars) {
   return value
@@ -161,17 +162,26 @@ export function diffMcpServers(applied, desired) {
   return { added, removed, changed };
 }
 
+// Every async MCP apply captures a generation. A connection Promise that
+// resolves after a newer reload must clean itself up instead of registering
+// stale tools.
+export function isCurrentGeneration(candidate, current) {
+  return candidate === current;
+}
+
 // -----------------------------------------------------------------------------
 // 9. Delete safety
 // -----------------------------------------------------------------------------
-// Uninstall only ever deletes a directory it can PROVE lives under the managed
-// plugins root (~/.easy-agent/plugins). A local marketplace, a --plugin-dir
-// dev checkout, or any external source dir is never deleted.
+// Uninstall only ever deletes a full version slot under the cache root:
+// <marketplace>/<plugin>/<version>. Merely being somewhere under the broad
+// plugins root is not enough — that would allow a corrupted state record to
+// delete a whole marketplace or all versions of a plugin.
 
-export function isManagedPluginPath(pluginsRoot, target) {
-  const root = path.resolve(pluginsRoot);
+export function isManagedPluginPath(cacheRoot, target) {
+  const root = path.resolve(cacheRoot);
   const rel = path.relative(root, path.resolve(target));
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return false;
+  return rel.split(path.sep).filter(Boolean).length >= 3;
 }
 
 // -----------------------------------------------------------------------------

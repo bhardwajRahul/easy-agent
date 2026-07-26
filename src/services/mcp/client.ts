@@ -345,8 +345,16 @@ async function doConnect(
     })})`,
   );
 
+  let cleaned = false;
   const cleanup = async (): Promise<void> => {
-    activeConnections.delete(name);
+    if (cleaned) return;
+    cleaned = true;
+    // A stale connection can finish after a newer generation has already
+    // connected under the same name. Never let cleanup of the stale instance
+    // unregister the newer one.
+    if (activeConnections.get(name)?.client === client) {
+      activeConnections.delete(name);
+    }
     await bundle.preCleanup();
     try {
       await client.close();
@@ -377,14 +385,31 @@ export async function clearServerCache(
   config: ScopedMcpServerConfig,
 ): Promise<void> {
   const key = getCacheKey(name, config);
+  const pending = connectionCache.get(key);
   connectionCache.delete(key);
   const existing = activeConnections.get(name);
   if (existing) {
-    activeConnections.delete(name);
+    if (activeConnections.get(name) === existing) activeConnections.delete(name);
     try {
       await existing.cleanup();
     } catch (error) {
       debugLog("mcp", `[${name}] cleanup during reconnect failed: ${(error as Error).message}`);
+    }
+  }
+
+  // Deleting the cache alone is insufficient when the connection handshake is
+  // still in flight: its completion callback would otherwise register a child
+  // process after the plugin was disabled. Await and dispose that exact stale
+  // instance without touching a newer connection with the same server name.
+  if (pending) {
+    const resolved = await pending.catch(() => undefined);
+    if (resolved?.type === "connected" && resolved !== existing) {
+      if (activeConnections.get(name) === resolved) activeConnections.delete(name);
+      try {
+        await resolved.cleanup();
+      } catch (error) {
+        debugLog("mcp", `[${name}] cleanup of in-flight connection failed: ${(error as Error).message}`);
+      }
     }
   }
 }

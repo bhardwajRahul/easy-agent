@@ -259,7 +259,16 @@ function normalizeHookGroup(
     const timeout = typeof entry.timeout === "number" && entry.timeout > 0 ? entry.timeout : 60;
     const shell = entry.shell === "sh" || entry.shell === "bash" ? entry.shell : undefined;
     const command = substitutePluginVars(entry.command, vars);
-    hooks.push({ type: "command", command, timeout, ...(shell ? { shell } : {}) });
+    hooks.push({
+      type: "command",
+      command,
+      timeout,
+      ...(shell ? { shell } : {}),
+      env: {
+        EASY_AGENT_PLUGIN_ROOT: vars.root,
+        EASY_AGENT_PLUGIN_DATA: vars.data,
+      },
+    });
   }
   if (hooks.length === 0) return null;
   return { event, hooks, ...(matcher ? { matcher } : {}) };
@@ -324,18 +333,27 @@ function normalizeMcpServer(
   const obj = raw as Record<string, unknown>;
   const type = obj.type;
   const sub = (s: string) => substitutePluginVars(s, vars);
-  const subEnv = (env: unknown): Record<string, string> | undefined => {
-    if (!env || typeof env !== "object") return undefined;
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
-      if (typeof v === "string") out[k] = sub(v);
+  const subRecord = (
+    env: unknown,
+    includePluginEnv = false,
+  ): Record<string, string> | undefined => {
+    const out: Record<string, string> = includePluginEnv
+      ? {
+          EASY_AGENT_PLUGIN_ROOT: vars.root,
+          EASY_AGENT_PLUGIN_DATA: vars.data,
+        }
+      : {};
+    if (env && typeof env === "object") {
+      for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
+        if (typeof v === "string") out[k] = sub(v);
+      }
     }
-    return Object.keys(out).length ? out : undefined;
+    return out;
   };
 
   if (type === "http" || type === "sse") {
     if (typeof obj.url !== "string" || !obj.url) return null;
-    const headers = subEnv(obj.headers);
+    const headers = subRecord(obj.headers);
     return { type, url: sub(obj.url), scope: "project", ...(headers ? { headers } : {}) } as ScopedMcpServerConfig;
   }
   // stdio (default)
@@ -343,7 +361,7 @@ function normalizeMcpServer(
   const args = Array.isArray(obj.args)
     ? obj.args.filter((a): a is string => typeof a === "string").map(sub)
     : [];
-  const env = subEnv(obj.env);
+  const env = subRecord(obj.env, true);
   return {
     type: "stdio",
     command: sub(obj.command),
@@ -401,6 +419,13 @@ export async function loadPlugin(opts: LoadPluginOptions): Promise<LoadedPlugin>
       emptyPlugin.skills.push({
         ...s,
         name: applyNamespace(name, s.name),
+        body: substitutePluginVars(s.body, vars),
+        frontmatter: {
+          ...s.frontmatter,
+          allowedTools: s.frontmatter.allowedTools.map((tool) =>
+            substitutePluginVars(tool, vars),
+          ),
+        },
         source: "plugin",
         pluginId: opts.pluginId,
         pluginRoot: opts.root,
@@ -413,9 +438,21 @@ export async function loadPlugin(opts: LoadPluginOptions): Promise<LoadedPlugin>
     const { agents, warnings: w } = await loadAgentsFromDir(dir, "plugin");
     warnings.push(...w);
     for (const a of agents) {
+      const originalPrompt = a.getSystemPrompt;
       emptyPlugin.agents.push({
         ...a,
         agentType: applyNamespace(name, a.agentType),
+        ...(a.tools
+          ? { tools: a.tools.map((tool) => substitutePluginVars(tool, vars)) }
+          : {}),
+        ...(a.disallowedTools
+          ? {
+              disallowedTools: a.disallowedTools.map((tool) =>
+                substitutePluginVars(tool, vars),
+              ),
+            }
+          : {}),
+        getSystemPrompt: () => substitutePluginVars(originalPrompt(), vars),
         source: "plugin",
         pluginId: opts.pluginId,
         pluginRoot: opts.root,
@@ -431,6 +468,8 @@ export async function loadPlugin(opts: LoadPluginOptions): Promise<LoadedPlugin>
       emptyPlugin.commands.push({
         ...c,
         name: applyNamespace(name, c.name),
+        body: substitutePluginVars(c.body, vars),
+        allowedTools: c.allowedTools.map((tool) => substitutePluginVars(tool, vars)),
         source: "plugin",
         pluginId: opts.pluginId,
         pluginRoot: opts.root,
@@ -446,6 +485,7 @@ export async function loadPlugin(opts: LoadPluginOptions): Promise<LoadedPlugin>
       emptyPlugin.outputStyles.push({
         ...st,
         name: applyNamespace(name, st.name),
+        prompt: substitutePluginVars(st.prompt, vars),
         source: "plugin",
         pluginId: opts.pluginId,
         pluginRoot: opts.root,

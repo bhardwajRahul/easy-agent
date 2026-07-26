@@ -31,6 +31,7 @@ import {
 } from "./schemas.js";
 import {
   getManagedMarketplaceDir,
+  getManagedMarketplaceRoot,
   getMarketplaceManifestPathCandidates,
   isPluginManifestDir,
   MARKETPLACE_MANIFEST_FILE,
@@ -39,8 +40,23 @@ import {
   readKnownMarketplaces,
   updateKnownMarketplaces,
   upsertMarketplace,
+  withPluginOperationLock,
 } from "./state.js";
-import { gitClone, gitUpdate } from "./git.js";
+import { gitClone } from "./git.js";
+
+function isInsideManagedMarketplaceRoot(candidate: string): boolean {
+  const root = path.resolve(getManagedMarketplaceRoot());
+  const target = path.resolve(candidate);
+  const rel = path.relative(root, target);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function assertManagedMarketplacePath(candidate: string, marketplaceName: string): void {
+  const expected = path.resolve(getManagedMarketplaceDir(marketplaceName));
+  if (!isInsideManagedMarketplaceRoot(candidate) || path.resolve(candidate) !== expected) {
+    throw new Error(`refusing to modify Git marketplace outside managed root: ${candidate}`);
+  }
+}
 
 // ─── manifest reading ─────────────────────────────────────────────────
 
@@ -104,6 +120,10 @@ export async function readMarketplaceManifest(sourcePath: string): Promise<Marke
  * references the user's directory in place.
  */
 export async function addMarketplace(source: MarketplaceSource): Promise<KnownMarketplace> {
+  return withPluginOperationLock(() => addMarketplaceUnlocked(source));
+}
+
+async function addMarketplaceUnlocked(source: MarketplaceSource): Promise<KnownMarketplace> {
   if (source.kind === "local") {
     const { manifest } = await readMarketplaceManifest(source.path);
     const entry: KnownMarketplace = {
@@ -118,27 +138,44 @@ export async function addMarketplace(source: MarketplaceSource): Promise<KnownMa
 
   // Git: clone into a temp dir, validate, then atomically move into place.
   const tmp = getManagedMarketplaceDir(`.pending-${process.pid}-${Date.now()}`);
-  await gitClone(source.url, tmp, source.ref);
-  let manifest: MarketplaceManifest;
+  let dest: string | undefined;
+  let rollback: string | undefined;
+  let swapped = false;
   try {
-    ({ manifest } = await readMarketplaceManifest(tmp));
-  } catch (error) {
-    await fs.rm(tmp, { recursive: true, force: true });
-    throw error;
-  }
-  const dest = getManagedMarketplaceDir(manifest.name);
-  await fs.rm(dest, { recursive: true, force: true });
-  await fs.mkdir(path.dirname(dest), { recursive: true });
-  await fs.rename(tmp, dest);
+    await fs.mkdir(getManagedMarketplaceRoot(), { recursive: true });
+    await gitClone(source.url, tmp, source.ref);
+    const { manifest } = await readMarketplaceManifest(tmp);
+    dest = getManagedMarketplaceDir(manifest.name);
+    rollback = getManagedMarketplaceDir(
+      `.rollback-${manifest.name}-${process.pid}-${Date.now()}`,
+    );
 
-  const entry: KnownMarketplace = {
-    name: manifest.name,
-    source,
-    installLocation: dest,
-    lastUpdated: new Date().toISOString(),
-  };
-  await updateKnownMarketplaces((draft) => upsertMarketplace(draft, entry));
-  return entry;
+    const targetExists = await fs.stat(dest).then(() => true).catch(() => false);
+    if (targetExists) await fs.rename(dest, rollback);
+    try {
+      await fs.rename(tmp, dest);
+      swapped = true;
+
+      const entry: KnownMarketplace = {
+        name: manifest.name,
+        source,
+        installLocation: dest,
+        lastUpdated: new Date().toISOString(),
+      };
+      await updateKnownMarketplaces((draft) => upsertMarketplace(draft, entry));
+      await fs.rm(rollback, { recursive: true, force: true });
+      return entry;
+    } catch (error) {
+      if (swapped) await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
+      const rollbackExists = await fs.stat(rollback).then(() => true).catch(() => false);
+      if (rollbackExists) await fs.rename(rollback, dest);
+      throw error;
+    }
+  } catch (error) {
+    throw error;
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export async function listMarketplaces(): Promise<KnownMarketplace[]> {
@@ -153,10 +190,50 @@ export async function getMarketplace(name: string): Promise<KnownMarketplace | u
 
 /** Re-fetch a Git marketplace / re-stamp a local one. */
 export async function updateMarketplace(name: string): Promise<KnownMarketplace> {
+  return withPluginOperationLock(() => updateMarketplaceUnlocked(name));
+}
+
+async function updateMarketplaceUnlocked(name: string): Promise<KnownMarketplace> {
   const existing = await getMarketplace(name);
   if (!existing) throw new Error(`marketplace not found: ${name}`);
   if (existing.source.kind === "git") {
-    await gitUpdate(existing.installLocation, existing.source.ref);
+    assertManagedMarketplacePath(existing.installLocation, existing.name);
+    const tmp = getManagedMarketplaceDir(`.pending-update-${process.pid}-${Date.now()}`);
+    const rollback = getManagedMarketplaceDir(
+      `.rollback-${existing.name}-${process.pid}-${Date.now()}`,
+    );
+    let swapped = false;
+    try {
+      await fs.mkdir(getManagedMarketplaceRoot(), { recursive: true });
+      await gitClone(existing.source.url, tmp, existing.source.ref);
+      const { manifest } = await readMarketplaceManifest(tmp);
+      if (manifest.name !== existing.name) {
+        throw new Error(
+          `marketplace update changed its name from "${existing.name}" to "${manifest.name}"`,
+        );
+      }
+      await fs.rename(existing.installLocation, rollback);
+      try {
+        await fs.rename(tmp, existing.installLocation);
+        swapped = true;
+        const updated: KnownMarketplace = {
+          ...existing,
+          lastUpdated: new Date().toISOString(),
+        };
+        await updateKnownMarketplaces((draft) => upsertMarketplace(draft, updated));
+        await fs.rm(rollback, { recursive: true, force: true });
+        return updated;
+      } catch (error) {
+        if (swapped) {
+          await fs.rm(existing.installLocation, { recursive: true, force: true }).catch(() => {});
+        }
+        const rollbackExists = await fs.stat(rollback).then(() => true).catch(() => false);
+        if (rollbackExists) await fs.rename(rollback, existing.installLocation);
+        throw error;
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    }
   } else {
     // Local: just re-validate so a broken edit surfaces now.
     await readMarketplaceManifest(existing.installLocation);
@@ -172,14 +249,21 @@ export async function updateMarketplace(name: string): Promise<KnownMarketplace>
  * touched (plan §35.5 safety boundary).
  */
 export async function removeMarketplace(name: string): Promise<void> {
+  return withPluginOperationLock(() => removeMarketplaceUnlocked(name));
+}
+
+async function removeMarketplaceUnlocked(name: string): Promise<void> {
   const existing = await getMarketplace(name);
   if (!existing) throw new Error(`marketplace not found: ${name}`);
   if (existing.source.kind === "git") {
-    await fs.rm(existing.installLocation, { recursive: true, force: true });
+    assertManagedMarketplacePath(existing.installLocation, existing.name);
   }
   await updateKnownMarketplaces((draft) => {
     delete draft.marketplaces[name];
   });
+  if (existing.source.kind === "git") {
+    await fs.rm(existing.installLocation, { recursive: true, force: true });
+  }
 }
 
 // ─── plugin resolution ────────────────────────────────────────────────

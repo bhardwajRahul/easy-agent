@@ -24,6 +24,8 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 // ── Point HOME at a sandbox BEFORE importing anything that resolves paths. ──
 const SANDBOX_HOME = await fs.mkdtemp(path.join(os.tmpdir(), "ea-stage35-home-"));
@@ -33,19 +35,39 @@ const { PluginManifestSchema, MarketplaceManifestSchema } = await import("../plu
 const { applyNamespace, splitNamespace, mcpServerNamespace } = await import("../plugins/namespace.js");
 const { resolveInsidePlugin } = await import("../plugins/pathSafety.js");
 const { loadPlugin } = await import("../plugins/loader.js");
-const { substitutePluginVars, getPluginDataDir } = await import("../plugins/paths.js");
+const {
+  substitutePluginVars,
+  getPluginDataDir,
+  getPluginCacheDir,
+  getPluginCacheRoot,
+  safePathSegment,
+} = await import("../plugins/paths.js");
 const marketplace = await import("../plugins/marketplace.js");
-const { installPlugin, uninstallPlugin, isManagedPluginPath } = await import("../plugins/install.js");
+const {
+  installPlugin,
+  inspectPlugin,
+  uninstallPlugin,
+  isManagedPluginPath,
+} = await import("../plugins/install.js");
 const { setPluginEnabled, getEnabledPluginIds } = await import("../plugins/enable.js");
 const { readInstalledPlugins } = await import("../plugins/state.js");
 const runtime = await import("../plugins/runtime.js");
 const { diffMcpServers, applyPluginMcpDiff } = await import("../plugins/mcpApply.js");
 const { findSkill } = await import("../services/skills/registry.js");
+const { skillTool } = await import("../tools/skillTool.js");
+const { matchesPermissionRule } = await import("../permissions/permissions.js");
 const { findAgent } = await import("../agents/registry.js");
 const { getAllUserCommands } = await import("../commands/userCommands/registry.js");
-const { resolveOutputStyle } = await import("../styles/registry.js");
+const {
+  resolveOutputStyle,
+  setActiveOutputStyle,
+  getActiveOutputStyleName,
+} = await import("../styles/registry.js");
 const { setMcpRegistryEntry, getMcpRegistryEntry } = await import("../services/mcp/registry.js");
 const { trustProject, resetGlobalStateCache } = await import("../config/globalState.js");
+const { detectRisks } = await import("../ui/trustGate.js");
+const { gitClone, gitUpdate, gitHeadCommit } = await import("../plugins/git.js");
+const execFileAsync = promisify(execFile);
 
 // ─── tiny assert harness ──────────────────────────────────────────────
 let passed = 0;
@@ -122,19 +144,19 @@ async function buildFixtures(root: string): Promise<Fixtures> {
   );
   await write(
     path.join(demoRoot, "skills", "greet", "SKILL.md"),
-    "---\nname: greet\ndescription: Greet the user warmly.\n---\nSay hello nicely.\n",
+    "---\nname: greet\ndescription: Greet the user warmly.\nallowed-tools: Bash(${EASY_AGENT_PLUGIN_ROOT}/bin/*)\n---\nSay hello from ${EASY_AGENT_PLUGIN_ROOT}; data=${EASY_AGENT_PLUGIN_DATA}.\n",
   );
   await write(
     path.join(demoRoot, "commands", "hello.md"),
-    "---\ndescription: Say hello.\n---\nGreet $ARGUMENTS.\n",
+    "---\ndescription: Say hello.\n---\nGreet $ARGUMENTS from ${EASY_AGENT_PLUGIN_ROOT}.\n",
   );
   await write(
     path.join(demoRoot, "agents", "helper.md"),
-    "---\nname: helper\ndescription: A general helper agent for demo tasks.\n---\nYou are a helpful demo agent.\n",
+    "---\nname: helper\ndescription: A general helper agent for demo tasks.\npermissionMode: auto\nhooks: true\nmcpServers: true\n---\nYou are a helper rooted at ${EASY_AGENT_PLUGIN_ROOT}.\n",
   );
   await write(
     path.join(demoRoot, "output-styles", "fancy.md"),
-    "---\nname: fancy\ndescription: A fancy output style.\n---\nRespond with flair.\n",
+    "---\nname: fancy\ndescription: A fancy output style.\n---\nRespond with flair using ${EASY_AGENT_PLUGIN_DATA}.\n",
   );
   await write(
     path.join(demoRoot, "hooks", "hooks.json"),
@@ -241,8 +263,17 @@ async function main(): Promise<void> {
   assert(applyNamespace("demo", "demo:greet") === "demo:greet", "applyNamespace idempotent");
   assert(splitNamespace("demo:greet")?.pluginName === "demo", "splitNamespace pluginName");
   assert(splitNamespace("bare") === null, "splitNamespace null for unqualified");
-  assert(mcpServerNamespace("demo", "local") === "demo:local", "mcpServerNamespace joins");
+  assert(
+    mcpServerNamespace("demo", "local") === "plugin:demo:local",
+    "mcpServerNamespace uses plugin:<plugin>:<server>",
+  );
   assert(substitutePluginVars("a/${EASY_AGENT_PLUGIN_ROOT}/b", { root: "/R", data: "/D" }) === "a//R/b", "var substitution");
+  assert(safePathSegment("../../escape") !== "../../escape", "unsafe version/path segment is sanitized");
+  const hostileCache = getPluginCacheDir("team", "demo", "../../escape");
+  assert(
+    path.relative(getPluginCacheRoot(), hostileCache).split(path.sep).length === 3,
+    "hostile version stays in exactly one cache slot",
+  );
 
   // [3] path containment
   section("[3] component-path containment");
@@ -265,14 +296,59 @@ async function main(): Promise<void> {
   assert(loaded.errors.length === 0, "demo plugin loads with no errors");
   assert(loaded.skills[0]?.name === "demo:greet", "skill namespaced → demo:greet");
   assert(loaded.skills[0]?.source === "plugin" && loaded.skills[0]?.pluginId === "demo@testmp", "skill provenance stamped");
+  assert(
+    loaded.skills[0]?.body.includes(fx.demoRoot) &&
+      loaded.skills[0]?.body.includes(getPluginDataDir("demo@testmp")),
+    "skill body substitutes ROOT + DATA",
+  );
+  assert(
+    loaded.skills[0]?.frontmatter.allowedTools[0]?.includes(fx.demoRoot),
+    "skill allowed-tools substitutes ROOT",
+  );
   assert(loaded.commands[0]?.name === "demo:hello", "command namespaced → demo:hello");
+  assert(loaded.commands[0]?.body.includes(fx.demoRoot), "command body substitutes ROOT");
   assert(loaded.agents[0]?.agentType === "demo:helper", "agent namespaced → demo:helper");
+  assert(loaded.agents[0]?.permissionMode === undefined, "plugin agent permissionMode is ignored");
+  assert(
+    loaded.agents[0]?.getSystemPrompt().includes(fx.demoRoot),
+    "agent prompt substitutes ROOT",
+  );
+  assert(
+    loaded.warnings.some((warning) => warning.includes("permissionMode")) &&
+      loaded.warnings.some((warning) => warning.includes("hooks")) &&
+      loaded.warnings.some((warning) => warning.includes("mcpServers")),
+    "ignored plugin-agent executable/permission fields emit warnings",
+  );
   assert(loaded.outputStyles.some((s) => s.name === "demo:fancy"), "output style namespaced → demo:fancy");
+  assert(
+    loaded.outputStyles.some(
+      (style) =>
+        style.name === "demo:fancy" &&
+        style.prompt.includes(getPluginDataDir("demo@testmp")),
+    ),
+    "output style prompt substitutes DATA",
+  );
   assert(loaded.hooks.length === 1 && loaded.hooks[0].event === "PreToolUse", "hooks parsed");
   assert(loaded.hooks[0].hooks[0].command === `echo ${fx.demoRoot}`, "hook ${ROOT} substituted");
-  assert(loaded.mcpServers[0]?.namespacedName === "demo:local", "mcp server namespaced → demo:local");
+  assert(
+    loaded.hooks[0].hooks[0].env?.EASY_AGENT_PLUGIN_ROOT === fx.demoRoot &&
+      loaded.hooks[0].hooks[0].env?.EASY_AGENT_PLUGIN_DATA ===
+        getPluginDataDir("demo@testmp"),
+    "hook subprocess receives ROOT + DATA env",
+  );
+  assert(
+    loaded.mcpServers[0]?.namespacedName === "plugin:demo:local",
+    "mcp server namespaced → plugin:demo:local",
+  );
   const mcpArgs = (loaded.mcpServers[0]?.config as { args?: string[] }).args ?? [];
   assert(mcpArgs[0] === `${fx.demoRoot}/server.js`, "mcp ${ROOT} substituted");
+  const mcpEnv =
+    (loaded.mcpServers[0]?.config as { env?: Record<string, string> }).env ?? {};
+  assert(
+    mcpEnv.EASY_AGENT_PLUGIN_ROOT === fx.demoRoot &&
+      mcpEnv.EASY_AGENT_PLUGIN_DATA === getPluginDataDir("demo@testmp"),
+    "MCP subprocess receives ROOT + DATA env",
+  );
   assert(loaded.hasExecutableComponents, "hooks/mcp flagged as executable");
 
   const escapeLoaded = await loadPlugin({ root: fx.escapeRoot, pluginId: "escape@testmp", strict: true });
@@ -288,9 +364,100 @@ async function main(): Promise<void> {
   assert(resolved.pluginSource.kind === "local", "resolvePlugin → local source");
   await assertThrows(() => marketplace.resolvePlugin("nope@testmp"), "resolve unknown plugin throws");
 
+  // [5b] Git refs accept raw commit SHAs, not only branch/tag names.
+  section("[5b] Git raw-SHA clone/update");
+  const gitOrigin = path.join(workRoot, "git-origin");
+  const gitCloneDir = path.join(workRoot, "git-clone");
+  await fs.mkdir(gitOrigin, { recursive: true });
+  await execFileAsync("git", ["init"], { cwd: gitOrigin });
+  await write(path.join(gitOrigin, "version.txt"), "one\n");
+  await execFileAsync("git", ["add", "version.txt"], { cwd: gitOrigin });
+  await execFileAsync(
+    "git",
+    ["-c", "user.name=Stage35", "-c", "user.email=stage35@example.invalid", "commit", "-m", "one"],
+    { cwd: gitOrigin },
+  );
+  const sha1 = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: gitOrigin })).stdout.trim();
+  await gitClone(gitOrigin, gitCloneDir, sha1);
+  assert((await gitHeadCommit(gitCloneDir)) === sha1.slice(0, 12), "gitClone accepts a raw commit SHA");
+
+  await write(path.join(gitOrigin, "version.txt"), "two\n");
+  await execFileAsync("git", ["add", "version.txt"], { cwd: gitOrigin });
+  await execFileAsync(
+    "git",
+    ["-c", "user.name=Stage35", "-c", "user.email=stage35@example.invalid", "commit", "-m", "two"],
+    { cwd: gitOrigin },
+  );
+  const sha2 = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: gitOrigin })).stdout.trim();
+  await gitUpdate(gitCloneDir, sha2);
+  assert((await gitHeadCommit(gitCloneDir)) === sha2.slice(0, 12), "gitUpdate accepts a raw commit SHA");
+
+  await execFileAsync("git", ["init"], { cwd: fx.claudeMarketplaceRoot });
+  await execFileAsync("git", ["add", "."], { cwd: fx.claudeMarketplaceRoot });
+  await execFileAsync(
+    "git",
+    ["-c", "user.name=Stage35", "-c", "user.email=stage35@example.invalid", "commit", "-m", "marketplace"],
+    { cwd: fx.claudeMarketplaceRoot },
+  );
+  const marketplaceSha = (
+    await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: fx.claudeMarketplaceRoot })
+  ).stdout.trim();
+  const gitMarketplace = await marketplace.addMarketplace({
+    kind: "git",
+    url: fx.claudeMarketplaceRoot,
+    ref: marketplaceSha,
+  });
+  assert(
+    gitMarketplace.name === "claudemp" &&
+      gitMarketplace.installLocation !== fx.claudeMarketplaceRoot,
+    "Git marketplace clones into a separate managed directory",
+  );
+  const gitMarketplaceInstall = await installPlugin("cdemo@claudemp", "user", projectCwd);
+  assert(
+    gitMarketplaceInstall.loaded.skills.some((skill) => skill.name === "cdemo:wave"),
+    "plugin installs from a Git marketplace",
+  );
+  await marketplace.removeMarketplace("claudemp");
+  runtime._resetPluginRuntimeForTesting();
+  const offlineCacheReload = await runtime.refreshActivePlugins(projectCwd, { applyMcp: false });
+  assert(
+    offlineCacheReload.plugins.some((plugin) => plugin.pluginId === "cdemo@claudemp") &&
+      findSkill("cdemo:wave") !== undefined,
+    "installed Git plugin reloads from cache after its marketplace is removed",
+  );
+  assert(
+    await fs.stat(fx.claudeMarketplaceRoot).then(() => true).catch(() => false),
+    "removing a Git marketplace never deletes its source repository",
+  );
+  await uninstallPlugin("cdemo@claudemp", { scope: "user", cwd: projectCwd });
+
   // [6] install + rollback
   section("[6] install + atomic rollback");
-  const install = await installPlugin("demo@testmp", "user");
+  await assertThrows(
+    () => installPlugin("demo@testmp", "user"),
+    "headless executable install fails closed without confirmation",
+  );
+  const preview = await inspectPlugin("demo@testmp");
+  assert(
+    preview.hasExecutableComponents &&
+      preview.components.hooks.length === 1 &&
+      preview.components.mcpServers.length === 1,
+    "install preflight reports exact executable component list",
+  );
+  const changedAfterPreview = path.join(fx.demoRoot, "changed-after-preview.txt");
+  await write(changedAfterPreview, "changed\n");
+  await assertThrows(
+    () =>
+      installPlugin("demo@testmp", "user", process.cwd(), {
+        allowExecutableComponents: true,
+        expectedFingerprint: preview.fingerprint,
+      }),
+    "content fingerprint rejects a package changed after confirmation",
+  );
+  await fs.rm(changedAfterPreview);
+  const install = await installPlugin("demo@testmp", "user", process.cwd(), {
+    allowExecutableComponents: true,
+  });
   assert(install.record.pluginId === "demo@testmp" && install.record.version === "1.0.0", "install record correct");
   assert(isManagedPluginPath(install.record.installPath), "install path is under managed cache");
   const cacheExists = await fs.stat(install.record.installPath).then(() => true).catch(() => false);
@@ -308,19 +475,69 @@ async function main(): Promise<void> {
   let res = await runtime.refreshActivePlugins(projectCwd, { applyMcp: false });
   assert(res.plugins.length === 1, "refresh picks up 1 enabled plugin");
   assert(findSkill("demo:greet") !== undefined, "skill registry has demo:greet after refresh");
+  assert(
+    matchesPermissionRule("Skill(demo:*)", "Skill", { skill: "demo:greet" }),
+    "Skill(plugin:*) permission rule matches a namespaced skill",
+  );
+  const skillResult = await skillTool.call(
+    { skill: "demo:greet", args: "Stage 35" },
+    { cwd: projectCwd, sessionId: "stage35-plugin-test" },
+  );
+  assert(
+    !skillResult.isError &&
+      typeof skillResult.content === "string" &&
+      skillResult.content.includes('Loaded skill "demo:greet"'),
+    'Skill(skill="plugin:name") executes through SkillTool',
+  );
   assert(findAgent("demo:helper") !== undefined, "agent registry has demo:helper");
   assert(getAllUserCommands().some((c) => c.name === "demo:hello"), "command registry has demo:hello");
   assert(resolveOutputStyle("demo:fancy") !== undefined, "style registry has demo:fancy");
 
+  assert(setActiveOutputStyle("demo:fancy"), "plugin output style can become active");
   await setPluginEnabled(projectCwd, "demo@testmp", false, "user");
   res = await runtime.refreshActivePlugins(projectCwd, { applyMcp: false });
   assert(res.plugins.length === 0, "disable removes the plugin");
   assert(findSkill("demo:greet") === undefined, "skill registry no longer has demo:greet");
   assert(getAllUserCommands().every((c) => c.name !== "demo:hello"), "command registry no longer has demo:hello");
+  assert(
+    getActiveOutputStyleName() === "default",
+    "disabled plugin's active output style falls back to default",
+  );
 
   await setPluginEnabled(projectCwd, "demo@testmp", true, "user");
   res = await runtime.refreshActivePlugins(projectCwd, { applyMcp: false });
   assert(res.plugins.length === 1 && findSkill("demo:greet") !== undefined, "re-enable restores the plugin");
+
+  const devRoot = path.join(workRoot, "dev-demo");
+  await write(
+    path.join(devRoot, ".easy-agent-plugin", "plugin.json"),
+    JSON.stringify({ name: "demo", version: "dev" }),
+  );
+  await write(
+    path.join(devRoot, "skills", "dev", "SKILL.md"),
+    "---\nname: dev\ndescription: Development override.\n---\nUse the development build.\n",
+  );
+  res = await runtime.refreshActivePlugins(projectCwd, {
+    applyMcp: false,
+    pluginDirs: [devRoot],
+  });
+  assert(
+    res.plugins.length === 1 &&
+      res.plugins[0]?.pluginId.endsWith("@dev") &&
+      findSkill("demo:dev") !== undefined &&
+      findSkill("demo:greet") === undefined,
+    "--plugin-dir deterministically overrides an installed plugin with the same name",
+  );
+  res = await runtime.refreshActivePlugins(projectCwd, { applyMcp: false });
+  assert(
+    findSkill("demo:dev") !== undefined,
+    "session --plugin-dir roots survive subsequent mutation/reload calls",
+  );
+  await runtime.refreshActivePlugins(projectCwd, {
+    applyMcp: false,
+    pluginDirs: [],
+  });
+  assert(findSkill("demo:greet") !== undefined, "clearing dev roots restores installed plugin");
 
   // [8] trust gating of executable components
   section("[8] trust gating (hooks/MCP)");
@@ -328,6 +545,11 @@ async function main(): Promise<void> {
   // Move enablement to PROJECT scope so trust applies (user scope is always trusted).
   await setPluginEnabled(projectCwd, "demo@testmp", null, "user");
   await setPluginEnabled(projectCwd, "demo@testmp", true, "project");
+  const risks = await detectRisks(projectCwd);
+  assert(
+    risks.some((risk) => risk.includes("project plugins")),
+    "trust gate warns about project-level enabledPlugins",
+  );
   resetGlobalStateCache();
   res = await runtime.refreshActivePlugins(projectCwd, { applyMcp: false });
   assert(res.plugins.length === 1, "project-enabled plugin still loads its prompt components");
@@ -338,28 +560,83 @@ async function main(): Promise<void> {
   res = await runtime.refreshActivePlugins(projectCwd, { applyMcp: false });
   assert((runtime.getActivePluginHooks().PreToolUse?.length ?? 0) === 1, "TRUSTED: plugin hooks applied");
 
+  // [8b] deterministic manifest-name conflict
+  section("[8b] duplicate plugin-name conflict");
+  const conflictMarket = path.join(workRoot, "conflict-market");
+  const conflictPlugin = path.join(conflictMarket, "plugins", "demo-alt");
+  await fs.cp(fx.demoRoot, conflictPlugin, { recursive: true });
+  await write(
+    path.join(conflictMarket, ".easy-agent-plugin", "marketplace.json"),
+    JSON.stringify({
+      name: "conflict",
+      plugins: [{ name: "demo-alt", source: "./plugins/demo-alt" }],
+    }),
+  );
+  await marketplace.addMarketplace({ kind: "local", path: conflictMarket });
+  await installPlugin("demo-alt@conflict", "user", projectCwd, {
+    allowExecutableComponents: true,
+  });
+  res = await runtime.refreshActivePlugins(projectCwd, { applyMcp: false });
+  assert(
+    res.plugins.filter((plugin) => plugin.name === "demo").length === 1,
+    "only one plugin with manifest name 'demo' becomes active",
+  );
+  assert(
+    res.errors.some(
+      (issue) => issue.scope === "manifest" && issue.message.includes("conflicts with"),
+    ),
+    "duplicate manifest name produces a structured deterministic error",
+  );
+  await uninstallPlugin("demo-alt@conflict", { scope: "user", cwd: projectCwd });
+  await marketplace.removeMarketplace("conflict");
+  await runtime.refreshActivePlugins(projectCwd, { applyMcp: false });
+
   // [9] MCP diff purity + cleanup
   section("[9] MCP diff + cleanup");
-  const a = new Map([["demo:local", { type: "stdio", command: "node", scope: "project" } as never]]);
-  const b = new Map([["demo:local", { type: "stdio", command: "node", scope: "project" } as never]]);
-  const c = new Map([["demo:other", { type: "stdio", command: "node", scope: "project" } as never]]);
+  const a = new Map([["plugin:demo:local", { type: "stdio", command: "node", scope: "project" } as never]]);
+  const b = new Map([["plugin:demo:local", { type: "stdio", command: "node", scope: "project" } as never]]);
+  const c = new Map([["plugin:demo:other", { type: "stdio", command: "node", scope: "project" } as never]]);
   assert(diffMcpServers(a, b).added.length === 0 && diffMcpServers(a, b).removed.length === 0, "identical maps → no churn");
-  assert(diffMcpServers(a, c).added[0] === "demo:other" && diffMcpServers(a, c).removed[0] === "demo:local", "diff detects add + remove");
+  assert(
+    diffMcpServers(a, c).added[0] === "plugin:demo:other" &&
+      diffMcpServers(a, c).removed[0] === "plugin:demo:local",
+    "diff detects add + remove",
+  );
 
   // Seed a fake registry entry, then reconcile to empty → it must be torn down.
   const fakeCfg = { type: "stdio", command: "node", scope: "project" } as never;
-  setMcpRegistryEntry("demo:local", { name: "demo:local", type: "failed", error: "seeded", config: fakeCfg } as never, []);
-  const churn = await applyPluginMcpDiff(new Map([["demo:local", fakeCfg]]), new Map());
-  assert(churn.stopped.includes("demo:local"), "reconcile-to-empty reports demo:local stopped");
-  assert(getMcpRegistryEntry("demo:local") === undefined, "MCP cleanup removed the registry entry");
+  setMcpRegistryEntry("plugin:demo:local", { name: "plugin:demo:local", type: "failed", error: "seeded", config: fakeCfg } as never, []);
+  const staleChurn = await applyPluginMcpDiff(
+    new Map([["plugin:demo:local", fakeCfg]]),
+    new Map(),
+    { generation: 1, isCurrent: () => false },
+  );
+  assert(
+    staleChurn.stopped.length === 0 &&
+      getMcpRegistryEntry("plugin:demo:local") !== undefined,
+    "stale MCP generation cannot remove a newer registry entry",
+  );
+  const churn = await applyPluginMcpDiff(new Map([["plugin:demo:local", fakeCfg]]), new Map());
+  assert(churn.stopped.includes("plugin:demo:local"), "reconcile-to-empty reports plugin:demo:local stopped");
+  assert(getMcpRegistryEntry("plugin:demo:local") === undefined, "MCP cleanup removed the registry entry");
 
   // [10] uninstall + delete safety
   section("[10] uninstall + delete safety");
   const installPathBefore = (await readInstalledPlugins()).plugins["demo@testmp"].installPath;
   await uninstallPlugin("demo@testmp", { scope: "project" });
-  assert((await readInstalledPlugins()).plugins["demo@testmp"] === undefined, "uninstall drops the install record");
+  assert(
+    (await readInstalledPlugins()).plugins["demo@testmp"] !== undefined,
+    "project uninstall preserves a user-scope installation",
+  );
+  const cacheStillPresent = await fs.stat(installPathBefore).then(() => true).catch(() => false);
+  assert(cacheStillPresent, "shared cache remains while another scope owns the install");
+  await uninstallPlugin("demo@testmp", { scope: "user" });
+  assert(
+    (await readInstalledPlugins()).plugins["demo@testmp"] === undefined,
+    "last-scope uninstall drops the install record",
+  );
   const cacheGone = await fs.stat(installPathBefore).then(() => false).catch(() => true);
-  assert(cacheGone, "managed cache dir deleted on uninstall");
+  assert(cacheGone, "managed cache dir deleted after the last owner uninstalls");
   const fixtureIntact = await fs.stat(fx.demoRoot).then(() => true).catch(() => false);
   assert(fixtureIntact, "SAFETY: source fixture dir NOT deleted");
   assert(!isManagedPluginPath(fx.demoRoot), "fixture dir correctly classified as unmanaged");

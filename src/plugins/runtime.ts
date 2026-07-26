@@ -21,6 +21,7 @@
  * always runs.
  */
 
+import * as path from "node:path";
 import { loadAllSkills } from "../services/skills/loadSkillsDir.js";
 import { setSkills } from "../services/skills/registry.js";
 import { getBuiltInAgents } from "../agents/builtIn/index.js";
@@ -29,7 +30,10 @@ import { setAgents } from "../agents/registry.js";
 import { loadAllUserCommands } from "../commands/userCommands/loadCommandsDir.js";
 import { setUserCommands } from "../commands/userCommands/registry.js";
 import { loadAllOutputStyles } from "../styles/loadOutputStylesDir.js";
-import { setCustomOutputStyles } from "../styles/registry.js";
+import {
+  ensureActiveOutputStyleAvailable,
+  setCustomOutputStyles,
+} from "../styles/registry.js";
 import { isProjectTrusted } from "../config/globalState.js";
 import type { HooksSettings } from "../hooks/types.js";
 import type { ScopedMcpServerConfig } from "../types/mcp.js";
@@ -54,6 +58,17 @@ export interface RefreshResult {
   mcpStarted: string[];
   /** Namespaced MCP server ids that were torn down this refresh. */
   mcpStopped: string[];
+  summary: {
+    enabledPlugins: number;
+    disabledPlugins: number;
+    skills: number;
+    agents: number;
+    commands: number;
+    outputStyles: number;
+    hooks: number;
+    mcpServers: number;
+    errors: number;
+  };
 }
 
 // ─── module state ─────────────────────────────────────────────────────
@@ -61,6 +76,9 @@ export interface RefreshResult {
 let activePlugins: LoadedPlugin[] = [];
 let activeErrors: PluginError[] = [];
 let activeHooks: HooksSettings = {};
+let sessionPluginDirs: string[] = [];
+let refreshGeneration = 0;
+let refreshQueue: Promise<void> = Promise.resolve();
 
 /** Snapshot of the plugin MCP configs currently applied (namespaced name → cfg). */
 let appliedMcp = new Map<string, ScopedMcpServerConfig>();
@@ -84,6 +102,9 @@ export function _resetPluginRuntimeForTesting(): void {
   activeErrors = [];
   activeHooks = {};
   appliedMcp = new Map();
+  sessionPluginDirs = [];
+  refreshGeneration = 0;
+  refreshQueue = Promise.resolve();
 }
 
 // ─── discovery ────────────────────────────────────────────────────────
@@ -96,17 +117,28 @@ export function _resetPluginRuntimeForTesting(): void {
 async function discoverPlugins(cwd: string, pluginDirs: string[]): Promise<{
   plugins: LoadedPlugin[];
   trustedById: Map<string, boolean>;
+  errors: PluginError[];
+  enabledCount: number;
+  disabledCount: number;
 }> {
   const trusted = await isProjectTrusted(cwd);
   const { enabled, bySource } = await getEnabledPluginState(cwd);
   const installed = (await readInstalledPlugins()).plugins;
 
-  const plugins: LoadedPlugin[] = [];
+  const pluginsByName = new Map<string, LoadedPlugin>();
   const trustedById = new Map<string, boolean>();
+  const errors: PluginError[] = [];
 
-  for (const pluginId of enabled) {
+  for (const pluginId of [...enabled].sort()) {
     const record = installed[pluginId];
-    if (!record) continue; // enabled but not installed → silently skip
+    if (!record) {
+      errors.push({
+        pluginId,
+        scope: "io",
+        message: "Plugin is enabled but has no installation record. Reinstall or disable it.",
+      });
+      continue;
+    }
     try {
       // Replay the load options captured at install time, so a plugin whose
       // identity/layout is described by its marketplace still resolves after a
@@ -118,28 +150,65 @@ async function discoverPlugins(cwd: string, pluginDirs: string[]): Promise<{
         nameHint: record.name,
         ...(record.componentPaths ? { overlay: record.componentPaths } : {}),
       });
-      plugins.push(loaded);
+      if (loaded.errors.some((issue) => issue.scope === "manifest")) {
+        errors.push(...loaded.errors);
+        continue;
+      }
+      const previous = pluginsByName.get(loaded.name);
+      if (previous) {
+        errors.push({
+          pluginId,
+          scope: "manifest",
+          message:
+            `Plugin name "${loaded.name}" conflicts with ${previous.pluginId}; ` +
+            "the first enabled plugin wins.",
+        });
+        continue;
+      }
+      pluginsByName.set(loaded.name, loaded);
       // user-scope enable → always trusted; project/local → gated by folder trust.
       const scope = bySource.get(pluginId);
       trustedById.set(pluginId, scope === "user" ? true : trusted);
     } catch (error) {
-      activeErrors.push({ pluginId, scope: "io", message: (error as Error).message });
+      errors.push({ pluginId, scope: "io", message: (error as Error).message });
     }
   }
 
-  // Dev plugin dirs: lenient manifest, always fully trusted (explicit CLI flag).
+  // Dev plugin dirs: lenient manifest, always fully trusted (explicit CLI
+  // flag), and intentionally override an installed plugin with the same
+  // manifest name so plugin authors can test local changes.
   for (const dir of pluginDirs) {
     const pluginId = `${devName(dir)}@dev`;
     try {
       const loaded = await loadPlugin({ root: dir, pluginId, strict: false });
-      plugins.push(loaded);
+      if (loaded.errors.some((issue) => issue.scope === "manifest")) {
+        errors.push(...loaded.errors);
+        continue;
+      }
+      const previous = pluginsByName.get(loaded.name);
+      if (previous) {
+        trustedById.delete(previous.pluginId);
+        errors.push({
+          pluginId: previous.pluginId,
+          scope: "manifest",
+          message: `Overridden by development plugin ${pluginId} (name "${loaded.name}").`,
+        });
+      }
+      pluginsByName.set(loaded.name, loaded);
       trustedById.set(pluginId, true);
     } catch (error) {
-      activeErrors.push({ pluginId, scope: "io", message: (error as Error).message });
+      errors.push({ pluginId, scope: "io", message: (error as Error).message });
     }
   }
 
-  return { plugins, trustedById };
+  const installedIds = Object.keys(installed);
+  return {
+    plugins: [...pluginsByName.values()],
+    trustedById,
+    errors,
+    enabledCount: [...enabled].filter((id) => installed[id] !== undefined).length,
+    disabledCount: installedIds.filter((id) => !enabled.has(id)).length,
+  };
 }
 
 function devName(dir: string): string {
@@ -157,11 +226,58 @@ export async function refreshActivePlugins(
   cwd: string,
   opts: RefreshOptions = {},
 ): Promise<RefreshResult> {
-  activeErrors = [];
-  const { plugins, trustedById } = await discoverPlugins(cwd, opts.pluginDirs ?? []);
-  activePlugins = plugins;
-  for (const p of plugins) activeErrors.push(...p.errors);
+  if (opts.pluginDirs !== undefined) {
+    sessionPluginDirs = [...new Set(opts.pluginDirs.map((dir) => path.resolve(cwd, dir)))];
+  }
+  const effectiveOptions: RefreshOptions = {
+    ...opts,
+    pluginDirs: [...sessionPluginDirs],
+  };
 
+  // Serialize refreshes. Install/enable UI actions can arrive close together;
+  // without this queue, a slower older load could overwrite a newer snapshot.
+  let resolveRun!: (result: RefreshResult) => void;
+  let rejectRun!: (error: unknown) => void;
+  const result = new Promise<RefreshResult>((resolve, reject) => {
+    resolveRun = resolve;
+    rejectRun = reject;
+  });
+  refreshQueue = refreshQueue
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        const prepared = await performRefresh(cwd, effectiveOptions);
+        // Release the snapshot mutex before MCP handshakes finish. A newer
+        // refresh can now advance the generation and cancel late old results.
+        void prepared.completion.then(resolveRun, rejectRun);
+      } catch (error) {
+        rejectRun(error);
+      }
+    });
+  return result;
+}
+
+async function performRefresh(
+  cwd: string,
+  opts: RefreshOptions,
+): Promise<{ completion: Promise<RefreshResult> }> {
+  const {
+    plugins,
+    trustedById,
+    errors: discoveryErrors,
+    enabledCount,
+    disabledCount,
+  } = await discoverPlugins(
+    cwd,
+    opts.pluginDirs ?? [],
+  );
+  const nextErrors = [
+    ...discoveryErrors,
+    ...plugins.flatMap((plugin) => plugin.errors),
+  ];
+
+  // Build the complete prospective snapshot first. A loader exception leaves
+  // every currently active registry untouched.
   // ── Base (built-in + user + project) reloaded fresh each time ──
   const [baseSkills, customAgents, baseCommands, baseStyles] = await Promise.all([
     loadAllSkills(cwd),
@@ -175,14 +291,13 @@ export async function refreshActivePlugins(
   const pluginAgents = plugins.flatMap((p) => p.agents);
   const pluginCommands = plugins.flatMap((p) => p.commands);
   const pluginStyles = plugins.flatMap((p) => p.outputStyles);
-
-  setSkills([...pluginSkills, ...baseSkills.skills]);
-  setAgents([...getBuiltInAgents(), ...pluginAgents, ...customAgents.agents]);
-  setUserCommands([...pluginCommands, ...baseCommands.commands]);
-  setCustomOutputStyles([...pluginStyles, ...baseStyles.styles]);
+  const nextSkills = [...pluginSkills, ...baseSkills.skills];
+  const nextAgents = [...getBuiltInAgents(), ...pluginAgents, ...customAgents.agents];
+  const nextCommands = [...pluginCommands, ...baseCommands.commands];
+  const nextStyles = [...pluginStyles, ...baseStyles.styles];
 
   // ── Executable components (trust-gated) ──
-  activeHooks = buildPluginHooksSettings(plugins, trustedById);
+  const nextHooks = buildPluginHooksSettings(plugins, trustedById);
 
   const desiredMcp = new Map<string, ScopedMcpServerConfig>();
   for (const p of plugins) {
@@ -192,19 +307,60 @@ export async function refreshActivePlugins(
     }
   }
 
-  let mcpStarted: string[] = [];
-  let mcpStopped: string[] = [];
+  // Commit all prompt-side registries in one synchronous section. No async
+  // operation can observe a half-updated plugin snapshot.
+  setSkills(nextSkills);
+  setAgents(nextAgents);
+  setUserCommands(nextCommands);
+  setCustomOutputStyles(nextStyles);
+  if (ensureActiveOutputStyleAvailable()) {
+    nextErrors.push({
+      pluginId: "runtime",
+      scope: "outputStyles",
+      message: "The active output style disappeared during reload; reset to default.",
+    });
+  }
+  activePlugins = plugins;
+  activeErrors = nextErrors;
+  activeHooks = nextHooks;
+
+  const makeResult = (
+    mcpStarted: string[] = [],
+    mcpStopped: string[] = [],
+  ): RefreshResult => ({
+    plugins: [...plugins],
+    errors: [...nextErrors],
+    mcpStarted,
+    mcpStopped,
+    summary: {
+      enabledPlugins: enabledCount,
+      disabledPlugins: disabledCount,
+      skills: pluginSkills.length,
+      agents: pluginAgents.length,
+      commands: pluginCommands.length,
+      outputStyles: pluginStyles.length,
+      hooks: plugins.reduce((sum, plugin) => sum + plugin.hooks.length, 0),
+      mcpServers: plugins.reduce((sum, plugin) => sum + plugin.mcpServers.length, 0),
+      errors: nextErrors.length,
+    },
+  });
+
   if (opts.applyMcp !== false) {
-    const churn = await applyPluginMcpDiff(appliedMcp, desiredMcp);
-    mcpStarted = churn.started;
-    mcpStopped = churn.stopped;
-    // Only record the applied snapshot when we actually reconciled processes —
-    // a prompt-only refresh (applyMcp:false) must leave the prior snapshot so a
-    // later real apply still sees these servers as "to start".
+    const generation = ++refreshGeneration;
+    const previousMcp = appliedMcp;
+    // Publish intent before connecting so a newer generation diffs against the
+    // desired state and can tear down this generation's in-flight servers.
     appliedMcp = desiredMcp;
+    const completion = applyPluginMcpDiff(previousMcp, desiredMcp, {
+      generation,
+      isCurrent: (candidate) => candidate === refreshGeneration,
+    }).then((churn) => makeResult(churn.started, churn.stopped));
+    return { completion };
   }
 
-  return { plugins, errors: activeErrors, mcpStarted, mcpStopped };
+  // Prompt-only refreshes intentionally leave the applied MCP snapshot alone;
+  // the later real apply must still see these servers as additions/removals.
+  return { completion: Promise.resolve(makeResult()) };
 }
 
 /** Collect trust-gated plugin hooks into the executor's HooksSettings shape. */
@@ -217,7 +373,12 @@ function buildPluginHooksSettings(
     if (!trustedById.get(p.pluginId)) continue;
     for (const entry of p.hooks) {
       const groups = settings[entry.event] ?? (settings[entry.event] = []);
-      groups.push({ hooks: entry.hooks, ...(entry.matcher ? { matcher: entry.matcher } : {}) });
+      groups.push({
+        hooks: entry.hooks,
+        ...(entry.matcher ? { matcher: entry.matcher } : {}),
+        pluginId: entry.pluginId,
+        pluginRoot: entry.pluginRoot,
+      });
     }
   }
   return settings;

@@ -26,6 +26,11 @@ import {
   loadSandboxSettings,
 } from "../../../sandbox/index.js";
 import { loadSettingsDiagnostics } from "../../../utils/settings.js";
+import {
+  getActivePluginErrors,
+  getActivePlugins,
+} from "../../../plugins/runtime.js";
+import { loadPluginStateDiagnostics } from "../../../plugins/state.js";
 import type { QueryEngineEvent } from "../types.js";
 import type { CommandContext } from "./context.js";
 
@@ -227,6 +232,24 @@ export async function* handleDoctorCommand(
   } else {
     lines.push(`${ICON.fail} Settings problems:`);
     for (const e of settingsErrors) lines.push(`    - ${e}`);
+  }
+
+  // Plugin loader/reload failures are structured and persistent for the active
+  // snapshot, so /doctor is the single place users can inspect them later.
+  const plugins = getActivePlugins();
+  const pluginErrors = getActivePluginErrors();
+  const pluginStateErrors = await loadPluginStateDiagnostics();
+  if (pluginErrors.length === 0 && pluginStateErrors.length === 0) {
+    lines.push(`${ICON.ok} Plugins: ${plugins.length} active, no load errors`);
+  } else {
+    lines.push(
+      `${ICON.fail} Plugins: ${plugins.length} active, ` +
+        `${pluginErrors.length + pluginStateErrors.length} issue(s)`,
+    );
+    for (const issue of pluginErrors) {
+      lines.push(`    - ${issue.pluginId} [${issue.scope}]: ${issue.message}`);
+    }
+    for (const issue of pluginStateErrors) lines.push(`    - state: ${issue}`);
   }
 
   yield { type: "command", kind: "info", message: lines.join("\n") };

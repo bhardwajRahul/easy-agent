@@ -207,6 +207,14 @@ export interface InstalledPluginRecord {
   installedAt: string;
   updatedAt: string;
   /**
+   * Scopes that currently own this global cached version. Project/local rows
+   * carry their project root so uninstalling in one checkout cannot remove a
+   * version still referenced by another checkout or by user scope.
+   *
+   * Missing on legacy v1 records means a single user-scope installation.
+   */
+  installations?: PluginInstallationScope[];
+  /**
    * Whether the plugin's own `plugin.json` was required at install time. `false`
    * for catalog entries marked `strict: false`, whose identity and layout come
    * from the entry instead. Absent means strict (the default).
@@ -219,6 +227,12 @@ export interface InstalledPluginRecord {
    * after a restart.
    */
   componentPaths?: PluginComponentPaths;
+}
+
+export interface PluginInstallationScope {
+  scope: PluginScope;
+  projectPath?: string;
+  installedAt: string;
 }
 
 export interface InstalledPluginsFile {

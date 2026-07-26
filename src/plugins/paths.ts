@@ -16,6 +16,7 @@
  */
 
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { getEasyAgentPath } from "../utils/paths.js";
 
 /**
@@ -51,17 +52,59 @@ export function getInstalledPluginsPath(): string {
 
 /** `~/.easy-agent/plugins/marketplaces/<name>` — managed clone of a Git marketplace. */
 export function getManagedMarketplaceDir(name: string): string {
-  return path.join(getPluginsRoot(), "marketplaces", name);
+  return path.join(getManagedMarketplaceRoot(), safePathSegment(name));
+}
+
+/** Root containing managed Git marketplace clones only. */
+export function getManagedMarketplaceRoot(): string {
+  return path.join(getPluginsRoot(), "marketplaces");
 }
 
 /** `~/.easy-agent/plugins/cache/<marketplace>/<plugin>/<version>` — version-locked copy. */
 export function getPluginCacheDir(marketplace: string, plugin: string, version: string): string {
-  return path.join(getPluginsRoot(), "cache", marketplace, plugin, version);
+  return path.join(
+    getPluginCacheRoot(),
+    safePathSegment(marketplace),
+    safePathSegment(plugin),
+    safePathSegment(version),
+  );
 }
 
 /** `~/.easy-agent/plugins/data/<plugin@marketplace>` — cross-version data dir. */
 export function getPluginDataDir(pluginId: string): string {
-  return path.join(getPluginsRoot(), "data", pluginId);
+  return path.join(getPluginDataRoot(), safePathSegment(pluginId));
+}
+
+/** Root containing only versioned, disposable plugin copies. */
+export function getPluginCacheRoot(): string {
+  return path.join(getPluginsRoot(), "cache");
+}
+
+/** Root containing persistent, explicitly user-removable plugin data. */
+export function getPluginDataRoot(): string {
+  return path.join(getPluginsRoot(), "data");
+}
+
+/**
+ * Convert untrusted manifest/catalog identifiers into one filesystem segment.
+ *
+ * Versions are publisher-controlled and may legally contain punctuation, but
+ * must never become path syntax. A short hash suffix preserves determinism and
+ * prevents two different unsafe versions from collapsing onto the same cache
+ * directory after replacement.
+ */
+export function safePathSegment(value: string): string {
+  const trimmed = value.trim();
+  const clean = trimmed
+    .replace(/[^a-zA-Z0-9._+-]/g, "-")
+    .replace(/^\.+$/, "")
+    .slice(0, 120);
+  if (clean === trimmed && clean !== "" && clean !== "." && clean !== "..") {
+    return clean;
+  }
+  const digest = createHash("sha256").update(trimmed).digest("hex").slice(0, 10);
+  const prefix = clean && clean !== "." && clean !== ".." ? clean : "unknown";
+  return `${prefix.slice(0, 100)}-${digest}`;
 }
 
 /** Canonical manifest path inside a plugin root directory (used for scaffolding). */

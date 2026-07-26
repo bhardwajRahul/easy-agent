@@ -74,17 +74,27 @@ function classify(error: unknown, stderr: string): GitError {
  * (callers clone into a fresh temp dir, then atomically rename into place).
  */
 export async function gitClone(url: string, dest: string, ref?: string): Promise<void> {
-  const args = ["clone", "--depth", "1"];
-  if (ref) args.push("--branch", ref);
-  args.push("--", url, dest);
-  await run(args);
+  if (!ref) {
+    await run(["clone", "--depth", "1", "--", url, dest]);
+    return;
+  }
+
+  // `git clone --branch <ref>` only accepts branch/tag names; a pinned commit
+  // SHA is a valid marketplace ref too. Init + fetch + detached checkout works
+  // uniformly for branches, tags, and raw SHAs.
+  await fs.mkdir(dest, { recursive: true });
+  await run(["init"], dest);
+  await run(["remote", "add", "origin", url], dest);
+  await run(["fetch", "--depth", "1", "origin", ref], dest);
+  await run(["checkout", "--detach", "FETCH_HEAD"], dest);
 }
 
 /** Fetch + hard-reset an existing managed clone to the latest `ref` (or HEAD). */
 export async function gitUpdate(dir: string, ref?: string): Promise<void> {
   await run(["fetch", "--depth", "1", "origin", ...(ref ? [ref] : [])], dir);
-  const target = ref ? `origin/${ref}` : "FETCH_HEAD";
-  await run(["reset", "--hard", target], dir);
+  // FETCH_HEAD works for branches, tags, and raw commit SHAs. `origin/<ref>`
+  // does not exist for a pinned SHA.
+  await run(["reset", "--hard", "FETCH_HEAD"], dir);
 }
 
 /** Short (12-char) HEAD commit SHA of a checkout, or undefined when unavailable. */
