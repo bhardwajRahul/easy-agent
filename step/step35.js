@@ -318,6 +318,18 @@ export function shouldRunExecutable({ enableScope, folderTrusted }) {
   return enableScope === "user" || folderTrusted === true;
 }
 
+/** Plugin Agents cannot smuggle their own permission mode, Hooks, or MCP. */
+export function sanitizePluginAgent(agent) {
+  const ignored = ["permissionMode", "permission_mode", "hooks", "mcpServers"];
+  const sanitized = Object.fromEntries(
+    Object.entries(agent).filter(([key]) => !ignored.includes(key)),
+  );
+  const warnings = ignored
+    .filter((key) => agent[key] !== undefined)
+    .map((key) => `plugin Agent field "${key}" was ignored`);
+  return { agent: sanitized, warnings };
+}
+
 /**
  * The returned state is a new value. Callers persist it through a locked
  * temp-file+rename transaction; if any validation throws, the input remains
@@ -569,6 +581,11 @@ export function atomicRefresh(currentSnapshot, buildCandidate) {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export function resolveActiveOutputStyle(activeStyle, availablePluginStyles) {
+  if (activeStyle === "default") return "default";
+  return availablePluginStyles.includes(activeStyle) ? activeStyle : "default";
 }
 
 // -----------------------------------------------------------------------------
@@ -872,6 +889,13 @@ export async function demoStep35() {
     enableScopes: installedState.enableScopes,
     folderTrusted: true,
   });
+  const sanitizedAgent = sanitizePluginAgent({
+    name: "reviewer",
+    tools: ["Read", "Grep"],
+    permissionMode: "auto",
+    hooks: { PreToolUse: [] },
+    mcpServers: { local: {} },
+  });
 
   // A late generation-1 MCP connection is cleaned after generation 2 wins.
   let currentGeneration = 1;
@@ -923,6 +947,13 @@ export async function demoStep35() {
       untrusted.summary.hooks + untrusted.summary.mcpServers,
     trustedExecutableComponents: trusted.summary.hooks + trusted.summary.mcpServers,
     namespacedSkill: trusted.registries.skills[0],
+    pluginAgentPrivilegesIgnored:
+      sanitizedAgent.agent.permissionMode === undefined &&
+      sanitizedAgent.agent.hooks === undefined &&
+      sanitizedAgent.agent.mcpServers === undefined &&
+      sanitizedAgent.warnings.length === 3,
+    removedStyleFallsBackToDefault:
+      resolveActiveOutputStyle("review:review-notes", []) === "default",
     exactDeleteBoundary: isExactManagedPluginPath(
       cacheRoot,
       installPath,
@@ -947,6 +978,8 @@ export function verifyStep35(result) {
     untrustedExecutablesAreGated: result.untrustedExecutableComponents === 0,
     trustedExecutablesRun: result.trustedExecutableComponents === 2,
     namespaceApplied: result.namespacedSkill === "review:review",
+    pluginAgentCannotEscalate: result.pluginAgentPrivilegesIgnored === true,
+    outputStyleFallback: result.removedStyleFallsBackToDefault === true,
     deletionIsExact: result.exactDeleteBoundary === true,
     staleMcpIsCleaned:
       result.staleConnectionCleaned === true &&
