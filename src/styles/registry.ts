@@ -24,7 +24,7 @@
  *   - We DROP plugin/managed scopes and the forced-plugin logic.
  */
 
-export type OutputStyleSource = "built-in" | "user" | "project";
+export type OutputStyleSource = "built-in" | "user" | "project" | "plugin";
 
 export interface OutputStyleConfig {
   /** Style identifier — what the user passes to `/output-style <name>`. */
@@ -45,6 +45,10 @@ export interface OutputStyleConfig {
    * the agent still knows how to use its tools.
    */
   keepCodingInstructions: boolean;
+  /** Stage 35: owning plugin id (`name@marketplace`) when source is "plugin". */
+  pluginId?: string;
+  /** Stage 35: owning plugin root directory, for provenance / reload / unload. */
+  pluginRoot?: string;
 }
 
 export const DEFAULT_OUTPUT_STYLE_NAME = "default";

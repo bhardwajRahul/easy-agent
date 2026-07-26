@@ -90,6 +90,11 @@ export const SettingsSchema = z.looseObject({
   enableAllProjectMcpServers: z.boolean().optional(),
   enabledMcpjsonServers: z.array(PermissionRule).optional(),
   disabledMcpjsonServers: z.array(PermissionRule).optional(),
+  // Stage 35: per-scope plugin enable map. Keys are stable plugin ids
+  // (`name@marketplace`); a `true` enables, `false` explicitly disables in
+  // this scope (later scope wins). Install lives globally in
+  // ~/.easy-agent/plugins; only ENABLE is scoped here.
+  enabledPlugins: z.record(z.string(), z.boolean()).optional(),
 });
 
 const RULE_ARRAY_KEYS = ["allow", "deny", "ask"] as const;

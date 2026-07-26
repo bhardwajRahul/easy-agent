@@ -64,6 +64,11 @@ import type {
   PermissionRuleScope,
   PermissionRuleRow,
   PermissionsViewData,
+  PluginAvailableRow,
+  PluginComponentCounts,
+  PluginInstalledRow,
+  PluginMarketplaceRow,
+  PluginViewData,
   DiffFilePatch,
   DiffViewData,
   QueryEngineEvent,
@@ -76,12 +81,18 @@ export type {
   PermissionRuleScope,
   PermissionRuleRow,
   PermissionsViewData,
+  PluginAvailableRow,
+  PluginComponentCounts,
+  PluginInstalledRow,
+  PluginMarketplaceRow,
+  PluginViewData,
   DiffFilePatch,
   DiffViewData,
   QueryEngineEvent,
   QueryEngineOptions,
   QueryEngineState,
 };
+export type { PluginMutation } from "./queryEngine/commands/plugin.js";
 
 // Pure, side-effect-free helpers live in ./queryEngine/helpers.ts.
 import { createEmptyUsage } from "./queryEngine/helpers.js";
@@ -116,6 +127,12 @@ import {
   handleMcpCommand,
 } from "./queryEngine/commands/registry.js";
 import { handleRewindCommand } from "./queryEngine/commands/rewind.js";
+import {
+  handlePluginCommand,
+  mutatePlugin as mutatePluginImpl,
+  type PluginMutation,
+} from "./queryEngine/commands/plugin.js";
+import { buildPluginView } from "./queryEngine/commands/pluginView.js";
 
 export class QueryEngine {
   private messages: MessageParam[];
@@ -829,13 +846,19 @@ export class QueryEngine {
         yield {
           type: "command",
           kind: "info",
-          message: "Commands: /help /clear /config [list|get|set] /cost /model [name|list|default] /mode [default|plan|auto] /think [on|off|<budget>] /effort [low|medium|high|max] /tasks [task|todo|reset] /mcp [tools <name>|reconnect <name>] /skills /agents /hooks /output-style [name] /history /compact /rewind [n] /status /context /doctor /copy [n] /export [file] /resume [n|id] /diff [n] /init /permissions [allow|deny|remove <rule>] /memory [edit <n>] /<skill-or-command> [args] /exit /quit /bye",
+          message: "Commands: /help /clear /config [list|get|set] /cost /model [name|list|default] /mode [default|plan|auto] /think [on|off|<budget>] /effort [low|medium|high|max] /tasks [task|todo|reset] /mcp [tools <name>|reconnect <name>] /plugin [install|enable|disable|marketplace ...] /skills /agents /hooks /output-style [name] /history /compact /rewind [n] /status /context /doctor /copy [n] /export [file] /resume [n|id] /diff [n] /init /permissions [allow|deny|remove <rule>] /memory [edit <n>] /<skill-or-command> [args] /exit /quit /bye",
         };
         return { handled: true };
       case "config":
         return yield* handleConfigCommand(this.commandContext(), args);
       case "mcp":
         return yield* handleMcpCommand(args);
+      case "plugin":
+      case "plugins":
+        return yield* handlePluginCommand(this.commandContext(), args);
+      case "marketplace":
+        // Shorthand for `/plugin marketplace ...` (plan §35.6 alias).
+        return yield* handlePluginCommand(this.commandContext(), ["marketplace", ...args]);
       case "output-style":
       case "output_style":
         return yield* handleOutputStyleCommand(args);
@@ -1185,6 +1208,19 @@ export class QueryEngine {
     scope: SettingSource,
   ): Promise<PermissionsViewData> {
     return mutatePermissionRuleImpl(this.commandContext(), op, rule, scope);
+  }
+
+  /**
+   * Apply one action from the interactive `/plugin` manager, reconcile the live
+   * registries, and return the refreshed view so the overlay stays in sync.
+   */
+  async mutatePlugin(action: PluginMutation): Promise<PluginViewData> {
+    return mutatePluginImpl(this.commandContext(), action);
+  }
+
+  /** Rebuild the `/plugin` manager snapshot without changing anything. */
+  async refreshPluginView(): Promise<PluginViewData> {
+    return buildPluginView(this.commandContext().cwd);
   }
 
 }

@@ -64,8 +64,19 @@ async function loadFromOneDir(dir: string, source: SkillSource): Promise<LoadedF
   const out: Skill[] = [];
   const warnings: string[] = [];
 
-  for (const dirName of entries) {
-    const skillDir = path.join(dir, dirName);
+  // A directory may either CONTAIN skill folders or BE one itself (its own
+  // SKILL.md sitting at the root). Both shapes are scanned, so a caller can
+  // point at a parent of many skills or at a single packaged skill.
+  const skillDirs: string[] = [];
+  const ownSkillFile = await fs
+    .stat(path.join(dir, SKILL_FILE))
+    .then((s) => s.isFile())
+    .catch(() => false);
+  if (ownSkillFile) skillDirs.push(dir);
+  skillDirs.push(...entries.map((name) => path.join(dir, name)));
+
+  for (const skillDir of skillDirs) {
+    const dirName = path.basename(skillDir);
     const filePath = path.join(skillDir, SKILL_FILE);
 
     let raw: string;
@@ -111,6 +122,19 @@ async function loadFromOneDir(dir: string, source: SkillSource): Promise<LoadedF
 export interface LoadAllSkillsResult {
   skills: Skill[];
   warnings: string[];
+}
+
+/**
+ * Stage 35: load skills from ONE arbitrary directory (e.g. a plugin's
+ * `skills/` dir). Reuses the same parser + realpath dedupe as the built-in
+ * user/project scopes — the Plugin Loader must never re-implement parsing.
+ */
+export async function loadSkillsFromDir(
+  dir: string,
+  source: SkillSource,
+): Promise<LoadAllSkillsResult> {
+  const { skills, warnings } = await loadFromOneDir(dir, source);
+  return { skills, warnings };
 }
 
 /**

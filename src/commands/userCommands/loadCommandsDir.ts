@@ -147,6 +147,18 @@ export interface LoadAllUserCommandsResult {
 }
 
 /**
+ * Stage 35: load slash commands from ONE arbitrary directory (e.g. a plugin's
+ * `commands/` dir), reusing the recursive `.md` walk + subdir→`:` namespacing.
+ */
+export async function loadCommandsFromDir(
+  dir: string,
+  source: UserCommandSource,
+): Promise<LoadAllUserCommandsResult> {
+  const { commands, warnings } = await loadFromOneDir(dir, source);
+  return { commands, warnings };
+}
+
+/**
  * Load every command from user + project scopes. Project is loaded second so
  * its entries override user-scope commands with the same name.
  */

@@ -7,6 +7,8 @@ import type {
   DiffViewData,
   MemoryPickerItem,
   PermissionsViewData,
+  PluginMutation,
+  PluginViewData,
 } from "../../core/queryEngine.js";
 import type { SettingSource } from "../../config/sources.js";
 import { buildTokenBudgetSnapshot } from "../../utils/tokens.js";
@@ -146,6 +148,8 @@ export function useAgentSession({
   const [memoryPicker, setMemoryPicker] = useState<MemoryPickerItem[] | null>(null);
   const [memoryPickerIndex, setMemoryPickerIndex] = useState(0);
   const [permissionView, setPermissionView] = useState<PermissionsViewData | null>(null);
+  // Stage 35 — `/plugin` interactive manager overlay.
+  const [pluginView, setPluginView] = useState<PluginViewData | null>(null);
   // Stage 20: live snapshot of the asyncAgentStore. The footer
   // BackgroundAgentBar component reads this to show running background
   // sub-agents (count + per-agent token / tool stats). We take a fresh
@@ -1001,6 +1005,11 @@ export function useAgentSession({
             // overlay mutates rules directly via engine.mutatePermissionRule().
             setPermissionView(value.data);
             break;
+          case "plugin_view":
+            // `/plugin` (no args) → interactive plugin/marketplace manager. The
+            // overlay applies changes via engine.mutatePlugin().
+            setPluginView(value.data);
+            break;
           case "open_editor": {
             // `/memory edit <n>` → hand the TTY to $EDITOR. The launcher
             // (App, via useStdin) suspends Ink's raw mode, runs the editor with
@@ -1263,6 +1272,7 @@ export function useAgentSession({
       memoryPicker,
       memoryPickerIndex,
       permissionView,
+      pluginView,
     },
     actions: {
       submit,
@@ -1298,6 +1308,16 @@ export function useAgentSession({
       // Permission-manager controls. Mutations call the engine directly (write +
       // reload) and feed back the fresh view so the overlay stays open.
       closePermissions: () => setPermissionView(null),
+      closePlugins: () => setPluginView(null),
+      // Plugin-manager actions. The engine performs the write, reconciles the
+      // live registries, and returns a fresh snapshot so the overlay stays open
+      // and in sync. Rejections propagate so the overlay can show the reason.
+      pluginMutate: async (action: PluginMutation): Promise<void> => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        const next = await engine.mutatePlugin(action);
+        setPluginView(next);
+      },
       permissionMutate: (
         op: "allow" | "deny" | "remove",
         rule: string,

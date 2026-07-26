@@ -12,7 +12,7 @@
  */
 
 /** Where a skill was loaded from. Affects override priority and display. */
-export type SkillSource = "user" | "project";
+export type SkillSource = "user" | "project" | "plugin";
 
 /** Raw frontmatter keys we read in this stage. Other keys are preserved in `frontmatter` for forward compat. */
 export interface SkillFrontmatter {
@@ -66,6 +66,10 @@ export interface Skill {
   baseDir: string;
   /** Where this skill came from. Project overrides user. */
   source: SkillSource;
+  /** Stage 35: owning plugin id (`name@marketplace`) when source is "plugin". */
+  pluginId?: string;
+  /** Stage 35: owning plugin root directory, for provenance / reload / unload. */
+  pluginRoot?: string;
   /** Parsed + normalized frontmatter. */
   frontmatter: SkillFrontmatter;
 }

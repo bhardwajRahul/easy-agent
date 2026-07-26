@@ -87,6 +87,7 @@ const BUILTIN_COMMANDS: CommandSuggestion[] = [
   { name: "/effort", description: "Set reasoning effort (low/medium/high/max, Anthropic)" },
   { name: "/tasks", description: "Switch task tracking system (task=persistent V2, todo=session V1)" },
   { name: "/mcp", description: "Inspect / reconnect MCP servers" },
+  { name: "/plugin", description: "Manage plugins & marketplaces (install/enable/disable/marketplace ...)" },
   { name: "/skills", description: "List loaded skills (user + project scope)" },
   { name: "/agents", description: "List built-in + custom sub-agent definitions" },
   { name: "/hooks", description: "Show configured lifecycle hooks (user + project scope)" },

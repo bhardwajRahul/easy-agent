@@ -123,6 +123,18 @@ export interface LoadAllOutputStylesResult {
 }
 
 /**
+ * Stage 35: load output styles from ONE arbitrary directory (e.g. a plugin's
+ * `output-styles/` dir), reusing the shared frontmatter parser.
+ */
+export async function loadOutputStylesFromDir(
+  dir: string,
+  source: OutputStyleSource,
+): Promise<LoadAllOutputStylesResult> {
+  const { styles, warnings } = await loadFromOneDir(dir, source);
+  return { styles, warnings };
+}
+
+/**
  * Load every custom style from user + project scopes. Project is loaded
  * second so its entries naturally override user-scope styles with the same
  * name in the returned (de-duped) list.

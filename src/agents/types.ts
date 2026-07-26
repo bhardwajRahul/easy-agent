@@ -17,7 +17,7 @@
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
 import type { LoopTerminationReason } from "../core/agenticLoop.js";
 
-export type AgentSource = "built-in" | "user" | "project";
+export type AgentSource = "built-in" | "user" | "project" | "plugin";
 
 export type AgentPermissionMode = "default" | "plan" | "auto";
 
@@ -68,6 +68,11 @@ export interface AgentDefinition {
 
   /** Where this definition came from. */
   source: AgentSource;
+
+  /** Stage 35: owning plugin id (`name@marketplace`) when source is "plugin". */
+  pluginId?: string;
+  /** Stage 35: owning plugin root directory, for provenance / reload / unload. */
+  pluginRoot?: string;
 
   /** Absolute path to the source `.md` file (custom agents only). */
   filePath?: string;

@@ -232,6 +232,23 @@ Settings keys (stage 25 — in ~/.easy-agent/settings.json or <cwd>/.easy-agent/
     console.error(`[easy-agent] commands bootstrap failed: ${(error as Error).message}`);
   });
 
+  // Plugins (stage 35) — layer enabled plugins' skills/agents/commands/styles/
+  // hooks on top of the base registries. This runs AFTER the four bootstraps
+  // above so it is the final authority on registry contents. The prompt-facing
+  // components are awaited (needed frame 1); MCP servers are started later,
+  // fire-and-forget alongside bootstrapMcp, so a slow `npx` server never blocks
+  // the UI. `--plugin-dir <dir>` (repeatable) loads dev plugins from disk.
+  const pluginDirs: string[] = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === "--plugin-dir" && process.argv[i + 1] && !process.argv[i + 1].startsWith("--")) {
+      pluginDirs.push(process.argv[i + 1]);
+    }
+  }
+  const { refreshActivePlugins } = await import("../plugins/runtime.js");
+  await refreshActivePlugins(process.cwd(), { pluginDirs, applyMcp: false }).catch((error) => {
+    console.error(`[easy-agent] plugins bootstrap failed: ${(error as Error).message}`);
+  });
+
   // Sandbox availability: if the user opted in via settings.json but
   // the host can't run sandbox-exec, surface the reason loudly. Silent
   // fall-back is a security footgun — users assume protection that
@@ -400,6 +417,13 @@ Settings keys (stage 25 — in ~/.easy-agent/settings.json or <cwd>/.easy-agent/
   const { logWarn } = await import("../utils/log.js");
   void bootstrapMcp(process.cwd()).catch((error) => {
     logWarn(`MCP bootstrap failed: ${(error as Error).message}`);
+  });
+
+  // Stage 35: bring up plugin-contributed MCP servers the same way — a second,
+  // non-blocking reconcile that starts their subprocesses without stalling the
+  // first frame. Prompt-facing plugin components were already applied above.
+  void refreshActivePlugins(process.cwd(), { pluginDirs }).catch((error) => {
+    logWarn(`plugin MCP bootstrap failed: ${(error as Error).message}`);
   });
 
   // Mark the UI as live BEFORE render() so any background warning that

@@ -12,7 +12,7 @@
  *   src/utils/argumentSubstitution.ts.
  */
 
-export type UserCommandSource = "user" | "project";
+export type UserCommandSource = "user" | "project" | "plugin";
 
 export interface UserCommand {
   /**
@@ -34,4 +34,8 @@ export interface UserCommand {
   filePath: string;
   /** Where this command came from. Project overrides user. */
   source: UserCommandSource;
+  /** Stage 35: owning plugin id (`name@marketplace`) when source is "plugin". */
+  pluginId?: string;
+  /** Stage 35: owning plugin root directory, for provenance / reload / unload. */
+  pluginRoot?: string;
 }

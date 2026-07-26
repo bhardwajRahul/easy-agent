@@ -20,6 +20,7 @@ import type {
 import type { TaskMode } from "../../state/taskModeStore.js";
 import type { FileHistorySnapshotRecord } from "../../session/storage.js";
 import type { SettingSource } from "../../config/sources.js";
+import type { PluginScope } from "../../plugins/schemas.js";
 import type { ToolContext } from "../../tools/Tool.js";
 
 /**
@@ -64,6 +65,60 @@ export interface PermissionsViewData {
   mode: PermissionMode;
   allow: PermissionRuleRow[];
   deny: PermissionRuleRow[];
+}
+
+/** Per-kind component counts for one loaded plugin. */
+export interface PluginComponentCounts {
+  skills: number;
+  agents: number;
+  commands: number;
+  outputStyles: number;
+  hooks: number;
+  mcpServers: number;
+}
+
+/** An installed plugin, as shown in the manager's "Installed" tab. */
+export interface PluginInstalledRow {
+  pluginId: string;
+  name: string;
+  marketplace: string;
+  version: string;
+  enabled: boolean;
+  /** Which settings layer turned it on, when enabled. */
+  scope?: PluginScope;
+  components: PluginComponentCounts;
+  errorCount: number;
+  /** False when enabled via project/local scope in an untrusted folder. */
+  executablesTrusted: boolean;
+}
+
+/** A catalogued plugin that is not installed yet — the "Discover" tab. */
+export interface PluginAvailableRow {
+  pluginId: string;
+  name: string;
+  marketplace: string;
+  description?: string;
+  version?: string;
+}
+
+/** A registered marketplace — the "Marketplaces" tab. */
+export interface PluginMarketplaceRow {
+  name: string;
+  kind: "local" | "git";
+  location: string;
+  lastUpdated: string;
+  /** Number of plugins the catalog advertises, or null when unreadable. */
+  pluginCount: number | null;
+  /** Populated when the manifest failed to parse. */
+  error?: string;
+}
+
+/** Structured payload for the interactive `/plugin` manager overlay. */
+export interface PluginViewData {
+  installed: PluginInstalledRow[];
+  available: PluginAvailableRow[];
+  marketplaces: PluginMarketplaceRow[];
+  errors: { pluginId: string; scope: string; message: string }[];
 }
 
 /** A single file's unified-patch body, parsed out of `git diff`. */
@@ -117,6 +172,7 @@ export type QueryEngineEvent =
   | { type: "open_editor"; filePath: string; label: string }
   | { type: "memory_picker"; items: MemoryPickerItem[] }
   | { type: "permissions_view"; data: PermissionsViewData }
+  | { type: "plugin_view"; data: PluginViewData }
   | {
       type: "session_switched";
       sessionId: string;

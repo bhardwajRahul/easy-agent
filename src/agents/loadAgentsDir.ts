@@ -189,6 +189,19 @@ export interface LoadAllAgentsResult {
 }
 
 /**
+ * Stage 35: load agent definitions from ONE arbitrary directory (e.g. a
+ * plugin's `agents/` dir), reusing the exact same frontmatter parser and
+ * field validation as the user/project scopes.
+ */
+export async function loadAgentsFromDir(
+  dir: string,
+  source: AgentSource,
+): Promise<LoadAllAgentsResult> {
+  const { agents, warnings } = await loadFromOneDir(dir, source);
+  return { agents, warnings };
+}
+
+/**
  * Load every custom agent from the user + project scopes. Order matters:
  * the registry's `setAgents()` overwrite-on-name semantics mean later
  * entries win, so we return user first, project second — and the

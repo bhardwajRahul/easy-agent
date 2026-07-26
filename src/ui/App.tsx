@@ -17,6 +17,7 @@ import { DiffView } from "./components/DiffView.js";
 import { SessionPicker } from "./components/SessionPicker.js";
 import { MemoryPicker } from "./components/MemoryPicker.js";
 import { PermissionManager } from "./components/PermissionManager.js";
+import { PluginManager } from "./components/PluginManager.js";
 import { TaskList } from "./components/TaskList.js";
 import { TeammatePicker } from "./components/TeammatePicker.js";
 import { TeammateViewer } from "./components/TeammateViewer.js";
@@ -156,7 +157,9 @@ export function App({ model, permissionMode, shouldResume, resumeSessionId }: Ap
   const resumePickerActive = Boolean(state.resumePicker);
   const memoryPickerActive = Boolean(state.memoryPicker);
   const permissionManagerActive = Boolean(state.permissionView);
-  const overlayActive = resumePickerActive || memoryPickerActive || permissionManagerActive;
+  const pluginManagerActive = Boolean(state.pluginView);
+  const overlayActive =
+    resumePickerActive || memoryPickerActive || permissionManagerActive || pluginManagerActive;
 
   const {
     inputValue,
@@ -403,6 +406,14 @@ export function App({ model, permissionMode, shouldResume, resumeSessionId }: Ap
               items={state.memoryPicker}
               index={state.memoryPickerIndex}
               cwd={statusCwd}
+            />
+          ) : null}
+          {state.pluginView ? (
+            <PluginManager
+              data={state.pluginView}
+              active={pluginManagerActive && !state.permissionPrompt && !state.questionPrompt}
+              onMutate={actions.pluginMutate}
+              onClose={actions.closePlugins}
             />
           ) : null}
           {state.permissionView ? (

@@ -19,6 +19,8 @@
 
 import { hooksGloballyDisabled, loadHooksSettings, findMatchingHooks } from "./settings.js";
 import { executeHookCommand, newHookCorrelationId } from "./executor.js";
+import { getActivePluginHooks } from "../plugins/runtime.js";
+import { HOOK_EVENTS } from "./types.js";
 import type {
   AggregatedHookOutcome,
   HookEvent,
@@ -36,13 +38,28 @@ const SETTINGS_CACHE = new Map<string, Promise<HooksSettings>>();
  * cwds (e.g. sub-agent worktrees) get their own snapshot, but two
  * tools running in the same cwd share one promise.
  */
-function getSettings(cwd: string): Promise<HooksSettings> {
+async function getSettings(cwd: string): Promise<HooksSettings> {
   let p = SETTINGS_CACHE.get(cwd);
   if (!p) {
     p = loadHooksSettings(cwd);
     SETTINGS_CACHE.set(cwd, p);
   }
-  return p;
+  const base = await p;
+  // Merge plugin-contributed hooks (stage 35) fresh each call — the active
+  // plugin set changes live via /plugin enable|disable, so it must NOT be
+  // frozen into the file-settings cache. Plugin groups are already trust-gated
+  // by the runtime; they concatenate AFTER the user/project groups so both fire.
+  return mergePluginHooks(base, getActivePluginHooks());
+}
+
+/** Concatenate two HooksSettings per event (left first, then right). */
+function mergePluginHooks(base: HooksSettings, plugin: HooksSettings): HooksSettings {
+  const merged: HooksSettings = {};
+  for (const event of HOOK_EVENTS) {
+    const groups = [...(base[event] ?? []), ...(plugin[event] ?? [])];
+    if (groups.length > 0) merged[event] = groups;
+  }
+  return merged;
 }
 
 /**
