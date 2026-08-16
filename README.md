@@ -1,99 +1,26 @@
 # Easy Agent
 
-An open-source, terminal-native project to fully recreate the Claude Code experience from the ground up.
+An open-source, terminal-native coding agent built with TypeScript and Node.js.
 
-![](./public/img/banner.jpeg)
+![Easy Agent banner](https://raw.githubusercontent.com/ConardLi/easy-agent/main/public/img/banner.jpeg)
 
-Easy Agent is a long-horizon engineering project focused on rebuilding a complete local agentic coding system in TypeScript and Node.js. The goal is not to publish isolated demos, but to incrementally construct a production-style coding agent with a clean architecture, strong safety boundaries, multi-turn orchestration, local tool execution, and the extensibility required for a full Claude Code-class developer experience.
+Easy Agent provides a Claude Code-style workflow in a readable, extensible codebase: streaming model conversations, local file and shell tools, permission modes, sessions, MCP, skills, sub-agents, Agent Teams, multimodal input, and plugins.
 
-This repository is the open-source implementation track of that effort. Full documentation will be added over time. For now, this README focuses on the project itself: what it aims to become, how it is structured, and where implementation currently stands.
+> 中文文档：[README.zh-CN.md](./README.zh-CN.md)
 
-> Chinese version: see [README.zh-CN.md](./README.zh-CN.md)
+## Project status
 
-## Vision
+**Current stage:** Stage 36 release candidate complete; first npm publication pending.
 
-Easy Agent aims to become a serious open-source recreation of a modern local coding agent system.
+The implementation, tutorial article, and `step/` snapshot tracks are complete through Stage 36. The single-file package, release verification, installer, user documentation, and tag-triggered publishing workflow are ready. The remaining release actions are publishing `eagent` to npm and running the post-publication registry cold checks.
 
-Core goals:
+## Roadmap and progress
 
-- Fully recreate the Claude Code-style workflow in an open-source codebase
-- Keep the architecture layered, explicit, and extensible
-- Prioritize real engineering systems over toy examples
-- Evolve incrementally toward a complete local Agent CLI
-- Preserve a stable path toward persistence, compaction, MCP, skills, sandboxing, sub-agents, multi-agent collaboration, multimodal input, plugins, and packaging
+Easy Agent follows a 37-stage roadmap that builds the system progressively from model communication to distribution.
 
-## Project Status
-
-**Current stage:** Stage 35 — Plugins and Marketplace, next
-
-The implementation track has completed through Stage 34, including the CLI, streaming communication, tool execution, terminal UI, session orchestration, context management, MCP, skills, sandboxing, sub-agents, background execution, Agent Teams, hooks, output styles, user commands, rendering upgrades, unified configuration, file history, resilience, headless print mode, classifier-driven Auto Mode, multi-provider streaming, the core-tool expansion for Web, MultiEdit, MCP resources, and PowerShell, multimodal image input, the expanded built-in command set, and Extended Thinking controls and display. Stage 35 is the next planned area: Plugins and Marketplace.
-
-The single-file `step/` snapshots now cover Stages 1–34, so the completed implementation chapters can be studied from focused standalone files as well as from the main source tree.
-
-Easy Agent should currently be understood as a serious open-source rebuild in progress rather than a finished end-user product.
-
-## Architecture
-
-Easy Agent is being built around a five-layer architecture:
-
-```text
-+---------------------------------------------------+
-| 1. Interaction Layer                              |
-|    Terminal UI, input handling, rendering         |
-+---------------------------------------------------+
-| 2. Orchestration Layer                            |
-|    Multi-turn session flow, usage, commands       |
-+---------------------------------------------------+
-| 3. Core Agentic Loop                              |
-|    Reason -> tool call -> observe -> continue     |
-+---------------------------------------------------+
-| 4. Tooling Layer                                  |
-|    File, shell, search, web, MCP, local actions   |
-+---------------------------------------------------+
-| 5. Model Communication Layer                      |
-|    Provider profiles and streaming LLM I/O        |
-+---------------------------------------------------+
-```
-
-This separation makes the system easier to evolve:
-
-- the **communication layer** handles provider selection, request translation, and streaming model I/O
-- the **tool layer** exposes actionable capabilities
-- the **agentic loop** drives single-turn autonomous execution
-- the **orchestration layer** manages multi-turn state and control flow
-- the **interaction layer** turns the runtime into a usable terminal product
-
-## Repository Layout
-
-```text
-easy-agent/
-├── src/
-│   ├── entrypoint/      # CLI bootstrap
-│   ├── ui/              # React/Ink terminal interface
-│   ├── core/            # agentic loop and query orchestration
-│   ├── agents/          # sub-agent definitions, registry, and runners
-│   ├── tools/           # local tools and tool registry
-│   ├── services/        # provider API, MCP, and skills services
-│   ├── permissions/     # permission and safety controls
-│   ├── context/         # system prompt and context management
-│   ├── sandbox/         # Bash sandbox profiles and wrapping
-│   ├── session/         # session persistence and history
-│   ├── state/           # UI/runtime stores for tasks, todos, agents
-│   ├── types/           # shared domain types
-│   └── utils/           # env, config, logging, helpers
-├── package.json
-├── tsconfig.json
-├── README.md
-└── README.zh-CN.md
-```
-
-## Roadmap and Progress
-
-The project follows a 37-phase roadmap designed to recreate the full Claude Code-style system progressively.
-
-| Phase | Area | Core Code | Status |
+| Stage | Area | Core snapshot | Status |
 |---|---|---|---:|
-| 0 | Project scaffold | `planned in step series` | ✅ Done |
+| 0 | Project scaffold | Project foundation | ✅ Done |
 | 1 | LLM communication layer | [`step/step1.js`](./step/step1.js) | ✅ Done |
 | 2 | React/Ink terminal UI | [`step/step2.js`](./step/step2.js) | ✅ Done |
 | 3 | Tool interface and first tool | [`step/step3.js`](./step/step3.js) | ✅ Done |
@@ -106,66 +33,76 @@ The project follows a 37-phase roadmap designed to recreate the full Claude Code
 | 10 | Project memory system | [`step/step10.js`](./step/step10.js) | ✅ Done |
 | 11 | Context compaction | [`step/step11.js`](./step/step11.js) | ✅ Done |
 | 12 | Fine-grained token budget management | [`step/step12.js`](./step/step12.js) | ✅ Done |
-| 13 | Plan mode | [`step/step13.js`](./step/step13.js) | ✅ Done |
+| 13 | Plan Mode | [`step/step13.js`](./step/step13.js) | ✅ Done |
 | 14 | TodoWrite session task tracking | [`step/step14.js`](./step/step14.js) | ✅ Done |
-| 15 | Task management system (V2) | [`step/step15.js`](./step/step15.js) | ✅ Done |
+| 15 | Persistent task graph (V2) | [`step/step15.js`](./step/step15.js) | ✅ Done |
 | 16 | MCP protocol support | [`step/step16.js`](./step/step16.js) | ✅ Done |
 | 17 | Skills system | [`step/step17.js`](./step/step17.js) | ✅ Done |
 | 18 | Sandbox | [`step/step18.js`](./step/step18.js) | ✅ Done |
 | 19 | Sub-Agent and agent definitions | [`step/step19.js`](./step/step19.js) | ✅ Done |
 | 20 | Background agents and worktree isolation | [`step/step20.js`](./step/step20.js) | ✅ Done |
-| 21 | Agent Teams / multi-agent collaboration | [`step/step21.js`](./step/step21.js) | ✅ Done |
+| 21 | Agent Teams and multi-agent collaboration | [`step/step21.js`](./step/step21.js) | ✅ Done |
 | 22 | Hooks lifecycle system | [`step/step22.js`](./step/step22.js) | ✅ Done |
 | 23 | Output styles and user commands | [`step/step23.js`](./step/step23.js) | ✅ Done |
 | 24 | Rendering experience upgrades | [`step/step24.js`](./step/step24.js) | ✅ Done |
 | 25 | Configuration system improvements | [`step/step25.js`](./step/step25.js) | ✅ Done |
-| 26 | File history and rollback | [`step/step26.js`](./step/step26.js) | ✅ Done |
+| 26 | File history and rewind | [`step/step26.js`](./step/step26.js) | ✅ Done |
 | 27 | Error handling and resilience | [`step/step27.js`](./step/step27.js) | ✅ Done |
-| 28 | Pipe mode / non-interactive execution | [`step/step28.js`](./step/step28.js) | ✅ Done |
-| 29 | Auto mode classifier | [`step/step29.js`](./step/step29.js) | ✅ Done |
+| 28 | Headless and pipe mode | [`step/step28.js`](./step/step28.js) | ✅ Done |
+| 29 | Auto Mode classifier | [`step/step29.js`](./step/step29.js) | ✅ Done |
 | 30 | Multi-provider support | [`step/step30.js`](./step/step30.js) | ✅ Done |
-| 31 | Core tool expansion: Web, MultiEdit, MCP resources, PowerShell | [`step/step31.js`](./step/step31.js) | ✅ Done |
-| 32 | Multimodal input: images and screenshots | [`step/step32.js`](./step/step32.js) | ✅ Done |
+| 31 | Web, MultiEdit, MCP resources, and PowerShell | [`step/step31.js`](./step/step31.js) | ✅ Done |
+| 32 | Multimodal image and screenshot input | [`step/step32.js`](./step/step32.js) | ✅ Done |
 | 33 | Built-in command completion | [`step/step33.js`](./step/step33.js) | ✅ Done |
-| 34 | Extended Thinking control and display | [`step/step34.js`](./step/step34.js) | ✅ Done |
-| 35 | Plugins and marketplace | `planned` | ⏳ Planned |
-| 36 | Packaging, publishing, and documentation | `planned` | ⏳ Planned |
+| 34 | Extended Thinking controls and display | [`step/step34.js`](./step/step34.js) | ✅ Done |
+| 35 | Plugins and Marketplace | [`step/step35.js`](./step/step35.js) | ✅ Done |
+| 36 | Packaging, publishing, and documentation | [`step/step36.js`](./step/step36.js) | 🚧 Release candidate |
 
-The [`easy-agent/step/`](./step/) directory contains tutorial-friendly milestone code, so each completed chapter is directly learnable and reproducible from a focused single file.
+Stage 36 has passed local typechecking, bundling, tarball boundary checks, isolated global installation, installer tests, real PTY startup, and `npm publish --dry-run`. Its final status will move to done after the first registry publication and cold `npx eagent@latest` verification.
 
-Current implementation notes:
+## Quick start
 
-- Stage 33 is complete in source, article track, and the step snapshot series.
-- Stage 34 is complete with three-state thinking controls, provider-aware requests and events, safe history replay, effort controls, and folded terminal display.
-- Stage 35 Plugins and Marketplace is next; it will unify the existing extension points into installable, distributable packages.
+Requirements: Node.js 22 or newer, npm, and credentials for at least one supported model provider.
 
-## What Easy Agent Is — and Is Not
+Try it without installing:
 
-**Easy Agent is:**
-- an open-source recreation project
-- a systems-engineering effort
-- a long-term implementation of a local coding agent
-- a public codebase evolving toward a full Claude Code-class CLI
+```bash
+export ANTHROPIC_AUTH_TOKEN="your-token"
+npx --yes eagent@latest
+```
 
-**Easy Agent is not:**
-- a one-file demo
-- a prompt-only wrapper around an API
-- a finished product today
-- a public mirror of any private course material
+Or install it globally:
 
-## Getting Started
+```bash
+npm install -g --ignore-scripts eagent
+eagent
+```
 
-### Requirements
+The long command name is also available:
 
-- Node.js 22+
-- npm
-- Access to at least one supported model provider: Anthropic, OpenAI-compatible APIs, Gemini, or a local OpenAI-compatible endpoint such as Ollama
+```bash
+easy-agent --help
+```
 
-### Model Providers
+An npm-backed installer is available for macOS and Linux:
 
-Easy Agent supports multiple providers by default. Anthropic model names still work directly, while OpenAI-compatible and Gemini models are configured as named profiles in `settings.json` and selected with `--model` or `/model`.
+```bash
+curl -fsSL https://raw.githubusercontent.com/ConardLi/easy-agent/main/install.sh | sh
+```
 
-Example user or project settings:
+The installer checks Node.js, installs the same npm package with `--ignore-scripts`, verifies `eagent` on `PATH`, and does not install Node.js or run package lifecycle scripts for you.
+
+## Model configuration
+
+For a raw Anthropic model name, environment variables are enough:
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="your-token"
+export ANTHROPIC_MODEL="claude-sonnet-4-20250514" # optional
+eagent
+```
+
+Easy Agent also supports named Anthropic, OpenAI-compatible, Gemini, and local profiles. Put settings in `~/.easy-agent/settings.json` for user-wide configuration or `.easy-agent/settings.json` for a project:
 
 ```json
 {
@@ -191,63 +128,128 @@ Example user or project settings:
 }
 ```
 
-Common environment variables:
+Select a profile with `eagent --model gpt` or `/model gpt` inside the REPL.
 
-- `ANTHROPIC_AUTH_TOKEN` — Anthropic API token for raw Claude model names
-- `ANTHROPIC_BASE_URL` — optional Anthropic-compatible API base URL
-- `ANTHROPIC_MODEL` — legacy/default raw Anthropic model name
-- `OPENAI_API_KEY` — OpenAI-compatible API key used by `${OPENAI_API_KEY}` profiles
-- `GEMINI_API_KEY` — Gemini API key used by `${GEMINI_API_KEY}` profiles
-- `WEB_SEARCH_API_KEY` — optional web search provider key
+| Environment variable | Purpose |
+|---|---|
+| `ANTHROPIC_AUTH_TOKEN` | Anthropic API token or compatible gateway token |
+| `ANTHROPIC_BASE_URL` | Optional Anthropic-compatible endpoint |
+| `ANTHROPIC_MODEL` | Default raw Anthropic model name |
+| `OPENAI_API_KEY` | Referenced by OpenAI-compatible profiles |
+| `GEMINI_API_KEY` | Referenced by Gemini profiles |
+| `WEB_SEARCH_API_KEY` | Optional WebSearch provider key |
 
-### Install
+Run `/config list`, `/model list`, or `/doctor` to inspect the effective setup.
+
+## Common usage
 
 ```bash
-npm install
+eagent                         # interactive REPL
+eagent --model gpt             # select a model profile
+eagent --plan                  # read-only planning mode
+eagent --auto                  # classifier-assisted permission mode
+eagent --resume                # resume the latest session
+eagent --resume <session-id>   # resume a specific session
+eagent -p "summarize this repo"                 # headless text output
+eagent -p "list the tools" --output-format json # machine-readable output
+git diff | eagent -p "review this patch"         # combine stdin and a prompt
 ```
 
-### Development
+Run `eagent --help` for every startup option. Useful REPL commands include:
+
+| Command | Purpose |
+|---|---|
+| `/help` | List commands and shortcuts |
+| `/model`, `/mode`, `/think`, `/effort` | Control model and reasoning behavior |
+| `/config`, `/status`, `/doctor`, `/context` | Inspect configuration and runtime health |
+| `/resume`, `/history`, `/export`, `/copy` | Work with sessions and output |
+| `/rewind`, `/diff` | Inspect or restore file changes |
+| `/permissions` | Inspect permission rules |
+| `/skills`, `/agents`, `/hooks`, `/mcp` | Inspect extension registries |
+| `/plugin`, `/marketplace` | Install and manage plugins |
+| `/memory` | Inspect or edit project memory |
+
+## Capabilities
+
+- File and code tools: Read, Write, Edit, MultiEdit, Glob, Grep, Bash, and PowerShell
+- Web and external tools: WebFetch, WebSearch, MCP tools, and MCP resources
+- Safe execution: allow/ask/deny rules, Plan Mode, Auto Mode, project trust, hooks, and shell sandboxing where supported
+- Long-running work: TodoWrite, persistent task graphs, sub-agents, background runs, Git worktree isolation, and Agent Teams
+- Context and continuity: session persistence, resume, compaction, token budgets, project memory, file checkpoints, and rewind
+- Extensibility: skills, custom agents, slash commands, output styles, hooks, MCP servers, plugins, and static marketplaces
+- Interfaces: interactive Ink UI, headless text/JSON/NDJSON output, images and screenshots, and multiple model protocols
+
+## Upgrade and uninstall
+
+Upgrade the global package, or re-run the installer:
 
 ```bash
+npm install -g --ignore-scripts eagent@latest
+```
+
+Remove it with:
+
+```bash
+npm uninstall -g eagent
+```
+
+User configuration and sessions under `~/.easy-agent/` are intentionally preserved when the npm package is removed.
+
+## Troubleshooting
+
+1. Run `eagent --version` and confirm Node.js with `node --version`.
+2. Run `/doctor` inside Easy Agent to inspect credentials, settings, MCP, plugins, sandbox support, and writable paths.
+3. Run `/status` and `/config list` to verify the active model and configuration sources.
+4. If a global install succeeds but `eagent` is not found, add the npm global bin directory associated with `npm prefix -g` to `PATH`, then open a new shell.
+5. Report reproducible problems through [GitHub Issues](https://github.com/ConardLi/easy-agent/issues).
+
+Never include API keys, `.env` contents, or private prompts in an issue.
+
+## Architecture
+
+Easy Agent keeps five runtime layers separate:
+
+```text
+Terminal UI
+    ↓
+QueryEngine (multi-turn orchestration)
+    ↓
+Agentic Loop (reason → tool → observe)
+    ↓
+Tools and permission enforcement
+    ↓
+Provider API and streaming adapters
+```
+
+Packaging is the delivery layer around those five runtime layers. The published npm package is a readable ESM bundle with a source map and no runtime dependency tree.
+
+The implementation and tutorial snapshot series are complete through Stage 35. Stage 36 packages the CLI for distribution and completes the public documentation.
+
+## Development
+
+```bash
+git clone https://github.com/ConardLi/easy-agent.git
+cd easy-agent
+npm install
 npm run dev
 ```
 
-### Build
+Useful checks:
 
 ```bash
+npm run typecheck
 npm run build
-npm start
+npm run test:stage36
+npm run verify:release
+npm publish --dry-run
 ```
 
-### Example CLI Options
+The main source lives under `src/`; milestone snapshots live under `step/`. Build output under `dist/` is generated and ignored by Git.
 
-```bash
-agent --help
-agent --model claude-sonnet-4-20250514
-agent --model gpt
-agent --model gemini
-echo "summarize this repo" | agent --print --output-format json
-agent --plan
-agent --auto
-agent --dump-system-prompt
-```
+## Contributing
 
-## Near-Term Priorities
-
-The next major milestones are:
-
-1. build Plugins and Marketplace in Stage 35
-2. close packaging, publishing, and documentation work in Stage 36
-3. complete the remaining acceptance and release checks across the implementation track
-
-## Contribution Policy
-
-Easy Agent is **not accepting external contributions at this stage**.
-
-The project is still in active reconstruction, and the implementation, structure, and development conventions are expected to change frequently. External contributions will be opened after the project reaches a more stable and maintainable state.
-
-Until then, you are welcome to follow the project and reference the public roadmap, but pull requests and outside code contributions are intentionally postponed for now.
+The project is still evolving quickly and is not accepting external pull requests yet. Issues with clear reproduction steps are welcome.
 
 ## License
 
-MIT
+[MIT](./LICENSE)
