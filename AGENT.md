@@ -4,7 +4,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## What this project is
 
-Easy Agent is a **terminal-native agentic coding CLI** (published as the `agent` binary) that aims to recreate Claude Code from scratch in TypeScript / Node.js.
+Easy Agent is a **terminal-native agentic coding CLI** published as the `eagent` npm package. It installs the `eagent` command and the `easy-agent` long alias.
 
 - Runtime: Node 22+, ESM, strict TS, target ES2022, JSX `react-jsx`
 - TUI: React 19 + Ink 7 (no web framework)
@@ -19,16 +19,18 @@ The code is organized into five broad layers:
 4. **Tooling** — file/shell/search/web/MCP/local tools with permissions and sandboxing (`src/tools/`, `src/permissions/`, `src/sandbox/`, `src/services/mcp/`)
 5. **Model communication** — provider profiles and streaming LLM I/O over `llm-bridge` (`src/services/api/`)
 
-The numbered roadmap is currently **Stage 35 planned / Stage 34 implemented**.
+The numbered roadmap is currently **Stage 35 implemented / Stage 36 packaging and release in progress**.
 
 ## Commands (the non-obvious ones)
 
-There is **no** `npm test`, **no lint/format script**, and **no CI workflow**. Tests are `tsx`-run smoke/characterization scripts wired directly in `package.json`.
+There is **no** catch-all `npm test` and no lint/format script. Tests are smoke/characterization scripts wired directly in `package.json`; the release workflow runs the Stage 36 verification before publishing.
 
-- **Build:** `npm run build` → `tsc` (outputs `dist/`)
+- **Typecheck:** `npm run typecheck` → `tsc --noEmit`
+- **Build:** `npm run build` → `tsup` (outputs the bundled `dist/eagent.js` + sourcemap)
 - **Dev (no rebuild needed):** `npm run dev` → `tsx src/entrypoint/cli.ts`
-- **Start built binary:** `npm start` → `node dist/entrypoint/cli.js`
-- **Stage smokes:** `npm run test:stage20` … `test:stage33`
+- **Start built binary:** `npm start` → `node dist/eagent.js`
+- **Stage smokes:** `npm run test:stage20` … `test:stage36`
+- **Release gate:** `npm run verify:release`
 - **Domain smokes:** `test:queryengine`, `test:providerstream`, `test:notices`, `test:streaming`, `test:tasks`, `test:mcp`, `test:skills`, `test:sandbox`, `test:agents`, `test:filehistory`, `test:resilience`
 - **Stage 24 sub-suites:** `test:stage24-md`, `…-clear`, `…-ui`, `…-ask`, `…-transcript`, `…-perm`, `…-stream`, `…-input`, `…-group`, `…-statusline`, `…-command`
 - **Smoke aliases:** `npm run smoke:sandbox`, `npm run smoke:bash-sandbox`
@@ -45,8 +47,8 @@ Most `test:*` commands run files under `src/scripts/`, but **`test:stage30` is t
   - `.claude/` (`skills/`, `agents/`, `commands/`) — Claude Code integration config
   - `.easy-agent/` (`skills/`, `agents/`, `commands/`, `settings.json`) — Easy Agent's own runtime config
   Do not merge them or move files between them.
-- **`step/` is intentional tutorial code**, not a build artifact. It holds milestone snapshots (`step1.js` … `step34.js`) that mirror implementation stages; do not delete or clean it up.
-- **`dist/` is tracked in git** alongside `node_modules/`. Rebuilding with `npm run build` regenerates it; this is expected.
+- **`step/` is intentional tutorial code**, not a build artifact. It holds milestone snapshots (`step1.js` … `step35.js`) that mirror implementation stages; do not delete or clean it up.
+- **`dist/` is generated and ignored by git**. Rebuilding with `npm run build` replaces it with the single-file release artifact and sourcemap.
 - **Secrets/config caution:** `.env` and `.easy-agent/settings.json` may contain local provider settings or secret-looking values. Do not copy token values into docs or output.
 - **No `CONTRIBUTING.md`**; per the README, external contributions are not accepted yet, so conventions may shift.
 - **Multi-provider model config** lives in user/project `settings.json`:

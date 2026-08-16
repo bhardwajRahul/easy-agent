@@ -1,0 +1,72 @@
+name: Release npm package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: npm-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  old-node-gate:
+    name: Verify the Node 20 failure path
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          package-manager-cache: false
+      - name: Expect an actionable Node version error
+        shell: bash
+        run: |
+          set +e
+          output="$(node dist/eagent.js --version 2>&1)"
+          status=$?
+          set -e
+          test "$status" -ne 0
+          case "$output" in
+            *"requires Node.js 22 or newer"*) ;;
+            *) printf '%s\n' "$output" >&2; exit 1 ;;
+          esac
+
+  publish:
+    name: Verify and publish
+    needs: old-node-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run verify:release
+      - name: Verify tag and choose npm channel
+        id: release
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "v${version}" = "$GITHUB_REF_NAME"
+          case "$version" in
+            *-*) printf 'tag=next\n' >> "$GITHUB_OUTPUT" ;;
+            *) printf 'tag=latest\n' >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: Publish with provenance
+        run: npm publish --provenance --access public --tag "${{ steps.release.outputs.tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

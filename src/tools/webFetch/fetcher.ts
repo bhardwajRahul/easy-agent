@@ -10,6 +10,7 @@
 
 import TurndownService from "turndown";
 import { validateFetchUrl } from "./urlValidation.js";
+import { HOMEPAGE, USER_AGENT } from "../../version.js";
 
 const FETCH_TIMEOUT_MS = 60_000;
 const MAX_REDIRECTS = 10;
@@ -114,7 +115,7 @@ export async function fetchUrlContent(
       signal: timeout.signal,
       headers: {
         Accept: "text/markdown, text/html, */*",
-        "User-Agent": "easy-agent/0.1 (+https://github.com/easy-agent) WebFetch",
+        "User-Agent": `${USER_AGENT} (+${HOMEPAGE}) WebFetch`,
       },
     });
   } finally {

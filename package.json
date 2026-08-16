@@ -1,16 +1,36 @@
 {
-  "name": "easy-agent",
+  "name": "eagent",
   "version": "0.1.0",
-  "description": "A terminal-native agentic coding system",
+  "description": "Easy Agent — a terminal-native agentic coding CLI, rebuilt from scratch in TypeScript",
   "type": "module",
-  "main": "dist/entrypoint/cli.js",
   "bin": {
-    "agent": "dist/entrypoint/cli.js"
+    "eagent": "dist/eagent.js",
+    "easy-agent": "dist/eagent.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ConardLi/easy-agent.git"
+  },
+  "homepage": "https://github.com/ConardLi/easy-agent#readme",
+  "bugs": {
+    "url": "https://github.com/ConardLi/easy-agent/issues"
   },
   "scripts": {
     "dev": "tsx src/entrypoint/cli.ts",
-    "build": "tsc",
-    "start": "node dist/entrypoint/cli.js",
+    "typecheck": "tsc --noEmit",
+    "build": "tsup",
+    "start": "node dist/eagent.js",
+    "prepack": "npm run typecheck && npm run build",
+    "prepublishOnly": "npm run verify:release",
     "test:queryengine": "tsx src/scripts/test-queryengine-characterization.ts",
     "test:providerstream": "tsx src/scripts/test-providerstream-characterization.ts",
     "test:notices": "tsx src/scripts/test-useagentsession-notices.ts",
@@ -49,8 +69,10 @@
     "test:stage31": "tsx src/scripts/test-stage31.ts",
     "test:stage32": "tsx src/scripts/test-stage32.ts",
     "test:stage33": "tsx src/scripts/test-stage33.ts",
-    "test:stage35": "tsx src/scripts/test-stage35.ts",
+    "test:stage35": "node --import tsx src/scripts/test-stage35.ts",
     "test:stage35-ui": "tsx src/scripts/test-stage35-ui.tsx",
+    "test:stage36": "npm run typecheck && npm run build && node --import tsx src/scripts/test-stage36.ts",
+    "verify:release": "npm run test:stage35 && npm run test:stage36",
     "verify:plugin": "tsx src/scripts/verify-plugin-compat.ts",
     "test:filehistory": "tsx src/scripts/smoke-filehistory.ts",
     "test:resilience": "tsx src/scripts/smoke-resilience.ts",
@@ -59,29 +81,28 @@
   },
   "keywords": [
     "agent",
+    "agentic",
     "cli",
-    "coding",
-    "ai"
+    "coding-agent",
+    "llm",
+    "mcp",
+    "terminal"
   ],
   "license": "MIT",
+  "dependencies": {},
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.102.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/diff": "^7.0.2",
     "@types/he": "^1.2.3",
     "@types/node": "^25.5.2",
     "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^19.2.14",
     "@types/turndown": "^5.0.6",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.3"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.102.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.6.2",
     "cli-highlight": "^2.1.11",
     "diff": "^9.0.0",
     "dotenv": "^17.4.1",
-    "figlet": "^1.11.0",
     "he": "^1.2.0",
     "ignore": "^7.0.5",
     "ink": "^7.0.0",
@@ -89,7 +110,10 @@
     "marked": "^18.0.4",
     "proper-lockfile": "^4.1.2",
     "react": "^19.2.4",
+    "tsup": "^8.5.0",
+    "tsx": "^4.21.0",
     "turndown": "^7.2.4",
+    "typescript": "^6.0.3",
     "yaml": "^2.8.3",
     "zod": "^4.4.3"
   }

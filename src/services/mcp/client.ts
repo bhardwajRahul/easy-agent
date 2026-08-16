@@ -30,6 +30,7 @@ import type {
   ScopedMcpServerConfig,
 } from "../../types/mcp.js";
 import { debugLog, logWarn } from "../../utils/log.js";
+import { CLIENT_NAME, USER_AGENT, VERSION } from "../../version.js";
 
 // ─── Connect timeout ─────────────────────────────────────────────────
 
@@ -222,7 +223,7 @@ function createHttpTransport(config: McpHTTPServerConfig & { scope: string }): T
   const transport = new StreamableHTTPClientTransport(new URL(config.url), {
     requestInit: {
       headers: {
-        "User-Agent": "easy-agent/0.1.0",
+        "User-Agent": USER_AGENT,
         ...(config.headers ?? {}),
       },
     },
@@ -245,7 +246,7 @@ function createSseTransport(config: McpSSEServerConfig & { scope: string }): Tra
   // dies after 60s. We don't have a timeout wrapper to begin with, so we
   // just ensure both header sets are present.
   const headers = {
-    "User-Agent": "easy-agent/0.1.0",
+    "User-Agent": USER_AGENT,
     ...(config.headers ?? {}),
   };
   const transport = new SSEClientTransport(new URL(config.url), {
@@ -296,7 +297,7 @@ async function doConnect(
   }
 
   const client = new Client(
-    { name: "easy-agent", version: "0.1.0" },
+    { name: CLIENT_NAME, version: VERSION },
     {
       capabilities: {
         // We declare empty `roots` — Easy Agent doesn't yet expose project

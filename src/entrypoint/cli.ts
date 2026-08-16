@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+// Must stay first: gates the Node version and enables source maps before any
+// other module body runs. See preflight.ts for why the ordering matters.
+import "./preflight.js";
 import { loadEnv } from "../utils/loadEnv.js";
 loadEnv();
 import { buildSystemPrompt, renderSystemPrompt } from "../context/systemPrompt.js";
 import type { PermissionMode } from "../permissions/permissions.js";
-
-const VERSION = "0.1.0";
+import { VERSION } from "../version.js";
 
 function parsePermissionMode(argv: string[]): PermissionMode | undefined {
   if (argv.includes("--auto")) return "auto";
@@ -21,16 +23,16 @@ function parsePermissionMode(argv: string[]): PermissionMode | undefined {
 
 async function main(): Promise<void> {
   if (process.argv.includes("--version") || process.argv.includes("-v")) {
-    console.log("easy-agent v" + VERSION);
+    console.log(`eagent ${VERSION}`);
     process.exit(0);
   }
 
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
     console.log(`
-easy-agent v${VERSION} — Terminal-native agentic coding system
+Easy Agent v${VERSION} — Terminal-native agentic coding system
 
 Usage:
-  agent [options]
+  eagent [options]            (long alias: easy-agent)
 
 Options:
   -v, --version               Print version and exit
@@ -40,7 +42,7 @@ Options:
                               raw Anthropic model name. See /model list.
   -p, --print [prompt]        Headless mode: run one non-interactive turn from
                               the prompt and/or piped stdin, print the result to
-                              stdout, and exit. (e.g. echo "hi" | agent -p)
+                              stdout, and exit. (e.g. echo "hi" | eagent -p)
   --output-format <fmt>       Headless output: text (default) | json | stream-json
                               json: one result object; stream-json: NDJSON stream
                               (system/init → assistant/user → result)
@@ -56,8 +58,8 @@ Options:
                               Without it, -p denies such calls by default.
   --settings <path>           Load an external settings.json as the flag layer
                               (inline --model / --permission-mode still win)
-  --agent-teams               Enable Agent Teams (stage 21 — TeamCreate /
-                              TeamDelete / SendMessage tools). Equivalent
+  --agent-teams               Enable Agent Teams (TeamCreate / TeamDelete /
+                              SendMessage tools). Equivalent
                               to setting EASY_AGENT_TEAMS=1.
   --dump-system-prompt        Print the assembled system prompt and exit
 
@@ -76,24 +78,25 @@ Commands (in REPL):
   /hooks                      Show configured lifecycle hooks
   /history                    Show session history
 
-Extensions (stage 23 — Markdown + frontmatter):
+Extensions (Markdown + frontmatter):
   Output styles: ~/.easy-agent/output-styles/<name>.md (default/Explanatory/Learning built-in)
   Commands:      ~/.easy-agent/commands/<name>.md → /<name>; team/review.md → /team:review
                  Body supports $ARGUMENTS / $1 / $2; frontmatter: description, argument-hint, model, allowed-tools
 
-Sub-agents (stage 19):
+Sub-agents:
   Built-in: general-purpose, Explore
   Custom:   add <cwd>/.easy-agent/agents/<name>.md or ~/.easy-agent/agents/<name>.md
-  See doc/DEVELOPMENT-PLAN.md §19 for the agent file frontmatter schema.
+  Frontmatter: name, description, tools, disallowedTools, model, maxTurns,
+               permissionMode, isolation. The Markdown body is the system prompt.
 
-Agent Teams (stage 21 — requires --agent-teams or EASY_AGENT_TEAMS=1):
+Agent Teams (requires --agent-teams or EASY_AGENT_TEAMS=1):
   TeamCreate({ team_name })                  Start a team-coordinated session
   Agent({ name, team_name, run_in_background: true, ... })  Spawn a named teammate
   SendMessage({ to, message, summary })      Drop a message in a teammate's inbox
   TeamDelete()                               Disband the active team
   Disabled by default; the model never sees the team tools when off.
 
-Hooks (stage 22 — user-defined shell scripts on lifecycle events):
+Hooks (user-defined shell scripts on lifecycle events):
   Configure in ~/.easy-agent/settings.json or <cwd>/.easy-agent/settings.json:
     {
       "hooks": {
@@ -108,7 +111,7 @@ Hooks (stage 22 — user-defined shell scripts on lifecycle events):
   Hook receives the event JSON on stdin; exit 2 + stderr blocks the action.
   Set EASY_AGENT_DISABLE_HOOKS=1 to disable all hooks globally.
 
-Settings keys (stage 25 — in ~/.easy-agent/settings.json or <cwd>/.easy-agent/settings.json):
+Settings keys (in ~/.easy-agent/settings.json or <cwd>/.easy-agent/settings.json):
   env: { "KEY": "value" }        Inject env vars into Bash commands (trusted sources only)
   language: "japanese"           Preferred response language (injected into the system prompt)
   apiKeyHelper: "vault token"    Script whose stdout is used as the API token when none is in env

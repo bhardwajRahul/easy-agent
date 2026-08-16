@@ -11,6 +11,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { USER_AGENT } from "../../version.js";
 
 // ─── Default Configuration ─────────────────────────────────────────
 
@@ -71,7 +72,7 @@ const profileClientCache = new Map<string, Anthropic>();
  * A profile-level `headers.user-agent` value still wins, so gateways with a
  * stricter contract remain fully configurable.
  */
-export const CUSTOM_ENDPOINT_USER_AGENT = "easy-agent/0.1.0";
+export const CUSTOM_ENDPOINT_USER_AGENT = USER_AGENT;
 
 function buildProfileDefaultHeaders(
   baseURL: string | undefined,

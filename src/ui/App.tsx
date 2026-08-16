@@ -39,8 +39,7 @@ import { useTeammateView } from "./hooks/useTeammateViewState.js";
 import { getAllUserInvocableSkills } from "../services/skills/registry.js";
 import { getAllUserCommands } from "../commands/userCommands/registry.js";
 import type { CommandSuggestion } from "./types.js";
-
-const VERSION = "0.1.0";
+import { VERSION } from "../version.js";
 
 interface AppProps {
   model: string;
