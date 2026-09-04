@@ -10,9 +10,9 @@ Easy Agent provides a Claude Code-style workflow in a readable, extensible codeb
 
 ## Project status
 
-**Current stage:** Stage 36 release candidate complete; first npm publication pending.
+**Current stage:** Stage 36 complete.
 
-The implementation, tutorial article, and `step/` snapshot tracks are complete through Stage 36. The single-file package, release verification, installer, user documentation, and tag-triggered publishing workflow are ready. The remaining release actions are publishing `eagent` to npm and running the post-publication registry cold checks.
+The implementation, tutorial article, and `step/` snapshot tracks are complete through Stage 36. The `eagent` package is published on npm under the `latest` tag, and the post-publication cold-cache registry check passes.
 
 ## Roadmap and progress
 
@@ -56,9 +56,9 @@ Easy Agent follows a 37-stage roadmap that builds the system progressively from 
 | 33 | Built-in command completion | [`step/step33.js`](./step/step33.js) | ✅ Done |
 | 34 | Extended Thinking controls and display | [`step/step34.js`](./step/step34.js) | ✅ Done |
 | 35 | Plugins and Marketplace | [`step/step35.js`](./step/step35.js) | ✅ Done |
-| 36 | Packaging, publishing, and documentation | [`step/step36.js`](./step/step36.js) | 🚧 Release candidate |
+| 36 | Packaging, publishing, and documentation | [`step/step36.js`](./step/step36.js) | ✅ Done |
 
-Stage 36 has passed local typechecking, bundling, tarball boundary checks, isolated global installation, installer tests, real PTY startup, and `npm publish --dry-run`. Its final status will move to done after the first registry publication and cold `npx eagent@latest` verification.
+Stage 36 has passed local typechecking, bundling, tarball boundary checks, isolated global installation, installer tests, real PTY startup, `npm publish --dry-run`, npm publication, and cold-cache `npx eagent@latest` verification.
 
 ## Quick start
 

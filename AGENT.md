@@ -19,7 +19,7 @@ The code is organized into five broad layers:
 4. **Tooling** — file/shell/search/web/MCP/local tools with permissions and sandboxing (`src/tools/`, `src/permissions/`, `src/sandbox/`, `src/services/mcp/`)
 5. **Model communication** — provider profiles and streaming LLM I/O over `llm-bridge` (`src/services/api/`)
 
-The numbered roadmap is currently **Stage 35 implemented / Stage 36 packaging and release in progress**.
+The numbered roadmap is complete through **Stage 36**. The `eagent` package is published on npm, and the post-publication registry cold check passes.
 
 ## Commands (the non-obvious ones)
 

@@ -8,6 +8,11 @@ Easy Agent 在一套可阅读、可扩展的代码中提供类 Claude Code 工�
 
 > English documentation: [README.md](./README.md)
 
+## 项目状态
+
+**当前阶段：**阶段 36 已完成。
+
+实现、教程文章与 `step/` 快照均已完成到阶段 36。`eagent` 已发布到 npm 的 `latest` 标签，发布后的冷缓存 registry 验证已经通过。
 
 ## 路线图与当前进度
 
@@ -51,8 +56,9 @@ Easy Agent 采用 37 阶段路线图，从模型通信开始，逐步构建到�
 | 33 | 内置命令补全 | [`step/step33.js`](./step/step33.js) | ✅ 已完成 |
 | 34 | Extended Thinking 控制与展示 | [`step/step34.js`](./step/step34.js) | ✅ 已完成 |
 | 35 | Plugins 与 Marketplace | [`step/step35.js`](./step/step35.js) | ✅ 已完成 |
-| 36 | 打包发布与文档 | [`step/step36.js`](./step/step36.js) | 🚧 发布候选 |
+| 36 | 打包发布与文档 | [`step/step36.js`](./step/step36.js) | ✅ 已完成 |
 
+阶段 36 已通过本地类型检查、单文件打包、tarball 边界检查、隔离全局安装、安装器测试、真实 PTY 启动、`npm publish --dry-run`、npm 发布及冷缓存 `npx eagent@latest` 验证。
 
 ## 快速开始
 
