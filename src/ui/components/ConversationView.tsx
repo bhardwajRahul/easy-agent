@@ -478,6 +478,7 @@ export function flattenConversation(
             }
           if (block?.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
             const result = toolResults.get(block.id);
+            if (block.name === "ToolSearch" && !result?.isError) continue;
             // Only emit once the result is committed — keeps the list
             // append-only (the live ToolCallList shows the in-flight card).
             if (!result) continue;

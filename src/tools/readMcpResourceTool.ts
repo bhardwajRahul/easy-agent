@@ -34,6 +34,8 @@ function findConnected(name: string): ConnectedMcpServer | undefined {
 
 export const readMcpResourceTool: Tool = {
   name: "ReadMcpResource",
+  searchHint: "read a resource from a connected MCP server",
+  shouldDefer: true,
   description:
     "Read the contents of a specific MCP resource by server name and URI (discover URIs with ListMcpResources).",
   inputSchema: {

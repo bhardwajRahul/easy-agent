@@ -65,6 +65,7 @@ function buildPromptText(skill: Skill, args: string, sessionId: string): string 
 
 export const skillTool: Tool = {
   name: "Skill",
+  searchHint: "invoke a slash-command skill",
   description:
     "Execute a named skill within the current conversation. Pass the skill's `name` " +
     "(as listed in the system-reminder block of available skills) and optional `args` " +

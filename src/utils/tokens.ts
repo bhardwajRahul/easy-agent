@@ -78,7 +78,9 @@ function estimateContentBlockTokens(content: MessageParam["content"]): number {
           estimateUnknownObjectTokens(block.input)
         );
       case "tool_result": {
-        const serialized = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+        const serialized = typeof block.content === "string" ? block.content : JSON.stringify(
+          block.content?.filter((item) => (item as { type: string }).type !== "tool_reference"),
+        );
         return total + TOOL_BLOCK_OVERHEAD_TOKENS + roughTokenCountEstimation(serialized, JSON_CHARS_PER_TOKEN);
       }
       case "image":

@@ -3,6 +3,7 @@ import { debugLog } from "../utils/log.js";
 import { buildTokenBudgetSnapshot } from "../utils/tokens.js";
 import type { MessageParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages.js";
 import type { Usage } from "../types/message.js";
+import { COMPACT_DISCOVERED_TOOLS_KEY, extractDiscoveredToolNames } from "../utils/toolSearch.js";
 
 export const OLD_TOOL_RESULT_PLACEHOLDER = "[Old tool result content cleared]";
 const MICROCOMPACT_MIN_MESSAGES = 10;
@@ -56,6 +57,13 @@ export interface CompactBoundaryMetadata {
   reason?: string;
   originalMessageCount: number;
   compactedToolIds?: string[];
+  /**
+   * Deferred tools that had been loaded via ToolSearch before compaction.
+   * The summary does not preserve the tool_reference blocks, so the set is
+   * snapshotted here and read back by `extractDiscoveredToolNames` so the
+   * post-compact requests keep sending those schemas.
+   */
+  discoveredTools?: string[];
 }
 
 export interface CompactBoundaryMessage {
@@ -179,6 +187,7 @@ function makeCompactBoundary(metadata: CompactBoundaryMetadata): CompactBoundary
       `messages=${metadata.originalMessageCount}`,
       metadata.reason ? `reason=${metadata.reason}` : "",
       metadata.compactedToolIds?.length ? `compacted_tool_ids=${metadata.compactedToolIds.join(",")}` : "",
+      metadata.discoveredTools?.length ? `${COMPACT_DISCOVERED_TOOLS_KEY}=${metadata.discoveredTools.join(",")}` : "",
     ].filter(Boolean).join(" "),
   };
 }
@@ -291,6 +300,10 @@ export async function compactMessages(
     };
   }
 
+  // Carry loaded-tool state across the boundary before the history is
+  // replaced by the summary.
+  const discoveredTools = [...extractDiscoveredToolNames(microCompacted)].sort();
+
   const summary = await summarizeMessages(microCompacted, focus, options.model);
   const desiredTailCount = 8;
   const tailStart = microCompacted.length <= desiredTailCount
@@ -307,6 +320,7 @@ export async function compactMessages(
       reason: focus,
       originalMessageCount: microCompacted.length,
       compactedToolIds: microcompactResult.compactedToolIds,
+      ...(discoveredTools.length > 0 ? { discoveredTools } : {}),
     }),
     ...tail,
   ];

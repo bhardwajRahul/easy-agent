@@ -75,13 +75,26 @@ export interface ImageBlock {
     | { type: "url"; url: string };
 }
 
+/**
+ * Reference to a deferred tool, emitted by ToolSearch inside a `tool_result`.
+ * The Anthropic API (with the tool-search beta) expands each reference into
+ * the tool's full definition in the model's context; non-Anthropic providers
+ * get the schema rendered as text by the translation layer instead. Only
+ * valid inside `tool_result.content` — never as a top-level message block.
+ */
+export interface ToolReferenceBlock {
+  type: "tool_reference";
+  tool_name: string;
+}
+
 export type ContentBlock =
   | TextBlock
   | ToolUseBlock
   | ToolResultBlock
   | ThinkingBlock
   | RedactedThinkingBlock
-  | ImageBlock;
+  | ImageBlock
+  | ToolReferenceBlock;
 
 // ─── Message Types ─────────────────────────────────────────────────
 

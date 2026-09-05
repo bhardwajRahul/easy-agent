@@ -2,7 +2,6 @@
  * Agentic Loop — Core loop orchestration for one user query.
  */
 
-import type Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
 import {
   checkPermission,
@@ -17,8 +16,11 @@ import { ESCALATED_MAX_TOKENS, MAX_OUTPUT_TOKENS_RECOVERY_LIMIT } from "../servi
 import type { QuerySource } from "../services/api/withRetry.js";
 import { compactMessages } from "../context/compaction.js";
 import { findToolByName } from "../tools/index.js";
-import { truncateToolResult, type ToolContext, type ToolResult } from "../tools/Tool.js";
+import { truncateToolResult, type Tool, type ToolContext, type ToolResult } from "../tools/Tool.js";
 import { appendTextToContent, prependTextToContent } from "../tools/contentBlocks.js";
+import { resolveProfile } from "../services/api/providers/profile.js";
+import { hasPendingMcpServers } from "../services/mcp/registry.js";
+import { buildSchemaNotSentHint, prepareToolSearchRequest } from "../utils/toolSearch.js";
 import {
   activateConditionalSkillsForPaths,
   extractToolFilePaths,
@@ -141,9 +143,14 @@ export interface AgenticLoopResult {
 export interface QueryParams {
   messages: MessageParam[];
   systemPrompt?: string;
-  tools?: Anthropic.Tool[];
+  /**
+   * Tool objects (not API params): the loop shapes them per request via
+   * `prepareToolSearchRequest`, which needs `shouldDefer` / `isMcp` /
+   * `alwaysLoad` to decide which schemas actually go on the wire.
+   */
+  tools?: Tool[];
   /** Dynamic tool list getter — called on each API iteration to reflect mode changes. */
-  getTools?: () => Anthropic.Tool[];
+  getTools?: () => Tool[];
   model: string;
   abortSignal?: AbortSignal;
   toolContext: ToolContext;
@@ -202,6 +209,11 @@ export interface RunToolsOptions {
   conversationMessages?: MessageParam[];
   /** Active model handle, forwarded to the Auto Mode classifier. */
   model?: string;
+  /**
+   * The tool pool offered to the model this turn. Used by the deferred-tool
+   * hint to confirm ToolSearch is actually callable before pointing at it.
+   */
+  availableTools?: readonly Tool[];
 }
 
 /**
@@ -314,7 +326,9 @@ async function runOneToolBlock(
   options: RunToolsOptions,
 ): Promise<RunOneToolReturn> {
   const toolInput = (block.input as Record<string, unknown>) ?? {};
-  const tool = findToolByName(block.name);
+  const tool = options.availableTools
+    ? options.availableTools.find((candidate) => candidate.name === block.name)
+    : findToolByName(block.name);
   if (!tool) {
     const result: ToolResult = {
       content: `Error: Unknown tool "${block.name}"`,
@@ -457,7 +471,11 @@ async function runOneToolBlock(
     // need to publish out-of-band updates (currently just AgentTool's
     // sub-agent progress store) can correlate their events back to
     // the right tool-call card in the UI.
-    const callContext: ToolContext = { ...context, toolUseId: block.id };
+    const callContext: ToolContext = {
+      ...context,
+      toolUseId: block.id,
+      availableTools: options.availableTools ?? context.availableTools,
+    };
 
     // ─── Stage 26: file-history track-edit (before the mutation) ──────
     // Back up the pre-edit content of any file Write/Edit is about to
@@ -482,6 +500,20 @@ async function runOneToolBlock(
       ...rawResult,
       content: truncateToolResult(rawResult.content, tool.maxResultSizeChars),
     };
+
+    // A failed call to a deferred tool whose schema was never loaded is
+    // almost always a parameter guess. Tell the model to ToolSearch first
+    // instead of letting it retry blind.
+    if (result.isError) {
+      const hint = buildSchemaNotSentHint(
+        tool,
+        options.conversationMessages ?? [],
+        options.availableTools ?? [],
+      );
+      if (hint) {
+        result = { ...result, content: appendTextToContent(result.content, hint) };
+      }
+    }
 
     // ─── Stage 22: PostToolUse hooks ─────────────────────────────────
     // Fire AFTER the tool executes. Two effects:
@@ -709,12 +741,31 @@ export async function* query(
       }
     }
 
-    const currentTools = params.getTools ? params.getTools() : params.tools;
+    // ─── ToolSearch: shape this request's tools + messages ────────────
+    // Deferred tools (MCP / shouldDefer) are sent only if a tool_reference
+    // in the history has loaded them; the rest are announced by name in an
+    // <available-deferred-tools> block prepended to the API copy of the
+    // history. `state.messages` itself is never mutated by this step.
+    const currentTools = (params.getTools ? params.getTools() : params.tools) ?? [];
+    const profile = await resolveProfile(params.model, params.toolContext.cwd);
+    const prepared = prepareToolSearchRequest({
+      tools: currentTools,
+      messages: state.messages,
+      model: profile.model,
+      env: {
+        protocol: profile.protocol,
+        baseURL: profile.baseURL ?? process.env.ANTHROPIC_BASE_URL,
+      },
+      hasPendingMcpServers: hasPendingMcpServers(),
+      source: params.subagentInfo ? "subagent" : "query",
+    });
     const stream = streamMessage({
-      messages: [...state.messages],
+      messages: prepared.messages,
       model: params.model,
       system: params.systemPrompt,
-      tools: currentTools && currentTools.length > 0 ? currentTools : undefined,
+      tools: prepared.tools.length > 0 ? prepared.tools : undefined,
+      toolSearchEnabled: prepared.enabled,
+      betaHeaders: prepared.betaHeaders,
       signal: params.abortSignal,
       // Stage 27: silent 64K escalation override (undefined → default cap).
       ...(maxOutputTokensOverride !== undefined ? { maxTokens: maxOutputTokensOverride } : {}),
@@ -968,6 +1019,7 @@ export async function* query(
         shouldAvoidPermissionPrompts: params.shouldAvoidPermissionPrompts,
         conversationMessages: state.messages,
         model: params.model,
+        availableTools: currentTools,
       },
     );
 

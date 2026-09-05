@@ -41,6 +41,8 @@ import { removeAgentWorktree } from "../utils/worktree.js";
 
 export const teamDeleteTool: Tool = {
   name: "TeamDelete",
+  searchHint: "disband a swarm team and clean up",
+  shouldDefer: true,
   description:
     "Disband the currently active Agent Teams session. " +
     "Removes the on-disk team file, every teammate's inbox, and any worktrees the teammates were operating in (when those worktrees are clean). " +

@@ -13,6 +13,8 @@ import { getPlanFilePath, ensurePlansDirectory } from "../context/plans.js";
 
 export const enterPlanModeTool: Tool = {
   name: "EnterPlanMode",
+  searchHint: "switch to plan mode to design an approach before coding",
+  shouldDefer: true,
 
   description:
     "Enter plan mode to explore the codebase with read-only tools before making changes. " +

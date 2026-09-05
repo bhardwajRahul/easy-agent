@@ -22,6 +22,7 @@ interface FileEditInput {
 
 export const fileEditTool: Tool = {
   name: "Edit",
+  searchHint: "modify file contents in place",
   description:
     "Find a string in a file and replace it. By default old_string must match uniquely; set replace_all=true to replace all occurrences.",
   inputSchema: {

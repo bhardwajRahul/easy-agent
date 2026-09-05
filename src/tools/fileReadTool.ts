@@ -25,6 +25,7 @@ function addLineNumbers(content: string, startLine: number): string {
 
 export const fileReadTool: Tool = {
   name: "Read",
+  searchHint: "read files, images, PDFs, notebooks",
   description:
     "Read the contents of a file at the specified path. " +
     "Use offset and limit to read specific line ranges for large files. " +

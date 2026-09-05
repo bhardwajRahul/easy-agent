@@ -22,6 +22,7 @@ async function hasCommand(command: string): Promise<boolean> {
 
 export const globTool: Tool = {
   name: "Glob",
+  searchHint: "find files by name pattern or wildcard",
   description: "Find files by glob pattern. Prefer this over Bash for file discovery.",
   inputSchema: {
     type: "object" as const,

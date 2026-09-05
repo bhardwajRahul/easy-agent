@@ -26,7 +26,7 @@
 
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
 import { query, type LoopTerminationReason } from "../core/agenticLoop.js";
-import { toolToApiParam, type Tool, type ToolContext } from "../tools/Tool.js";
+import { type Tool, type ToolContext } from "../tools/Tool.js";
 import type {
   PermissionDecision,
   PermissionMode,
@@ -166,7 +166,6 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
   const startTime = Date.now();
   const def = params.agentDefinition;
   const resolved = resolveAgentTools(def, params.availableTools);
-  const toolApiParams = resolved.resolvedTools.map(toolToApiParam);
 
   // Sub-agent gets its own session id so its TodoWrite / Task state
   // doesn't pollute the parent's. Format keeps the parent's id as a
@@ -241,7 +240,7 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
   const loop = query({
     messages: initialMessages,
     systemPrompt: def.getSystemPrompt(),
-    tools: toolApiParams,
+    tools: resolved.resolvedTools,
     model: params.model,
     abortSignal: params.abortSignal,
     toolContext: subToolContext,

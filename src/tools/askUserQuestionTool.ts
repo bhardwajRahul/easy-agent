@@ -82,6 +82,8 @@ function parseQuestions(input: Record<string, unknown>): UserQuestion[] | { erro
 
 export const askUserQuestionTool: Tool = {
   name: "AskUserQuestion",
+  searchHint: "prompt the user with a multiple-choice question",
+  shouldDefer: true,
   description:
     "Ask the user one or more multiple-choice questions and wait for their " +
     "answer. Use this when you need the user to make a decision among " +

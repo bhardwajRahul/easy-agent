@@ -77,6 +77,8 @@ function resolveSenderName(context: ToolContext): string {
 
 export const sendMessageTool: Tool = {
   name: "SendMessage",
+  searchHint: "send messages to agent teammates (swarm protocol)",
+  shouldDefer: true,
   description:
     "Send a plain-text message to another teammate's inbox in the active Agent Teams session. " +
     "The recipient sees the message as a `<teammate-message>` context block at the start of their next loop turn. " +

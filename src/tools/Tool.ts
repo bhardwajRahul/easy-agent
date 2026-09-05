@@ -13,6 +13,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import type { ContentBlock } from "../types/message.js";
+import { areExperimentalBetasDisabled } from "../utils/experimentalBetas.js";
 
 // ─── Interactive questions (AskUserQuestion) ───────────────────────
 
@@ -111,6 +112,8 @@ export interface ToolContext {
    * so the parent's tool-call card can be matched to the right sub-agent.
    */
   toolUseId?: string;
+  /** Tool pool allowed for this invocation, including undiscovered tools. */
+  availableTools?: readonly Tool[];
 
   /**
    * Stage 21 — Agent Teams identity. Populated by AgentTool when this
@@ -205,6 +208,41 @@ export interface Tool {
    * sub-agent runs in an isolated context) can opt in to true.
    */
   isConcurrencySafe?(input?: Record<string, unknown>): boolean;
+
+  // ─── ToolSearch metadata ─────────────────────────────────────────
+  //
+  // When tool search is active, "deferred" tools are not sent with their
+  // full schema on every request. The model sees only their names (in an
+  // <available-deferred-tools> list) and must call ToolSearch to load a
+  // schema before invoking the tool. `isDeferredTool()` in
+  // utils/toolSearch.ts combines the flags below in a fixed order:
+  //   alwaysLoad → isMcp → (ToolSearch itself) → shouldDefer
+
+  /**
+   * When true, this tool is deferred (sent with `defer_loading: true`) and
+   * requires ToolSearch to be used before it can be called.
+   */
+  readonly shouldDefer?: boolean;
+
+  /**
+   * When true, this tool is never deferred — its full schema appears in the
+   * initial prompt even when ToolSearch is enabled. For MCP tools, set via
+   * `_meta['anthropic/alwaysLoad']`. Use for tools the model must see on
+   * turn 1 without a ToolSearch round-trip.
+   */
+  readonly alwaysLoad?: boolean;
+
+  /** True for tools adapted from an MCP server. MCP tools are deferred by default. */
+  readonly isMcp?: boolean;
+
+  /**
+   * One-line capability phrase used by ToolSearch for keyword matching.
+   * Helps the model find this tool via keyword search when it's deferred.
+   * 3–10 words, no trailing period. Prefer terms not already in the tool
+   * name (e.g. 'jupyter' for NotebookEdit). For MCP tools, set via
+   * `_meta['anthropic/searchHint']`.
+   */
+  readonly searchHint?: string;
 }
 
 /** Truncate tool result content to the specified max size. */
@@ -239,6 +277,7 @@ export function toolResultText(content: string | ContentBlock[]): string {
     .map((block) => {
       if (block.type === "text") return block.text;
       if (block.type === "image") return "[image]";
+      if (block.type === "tool_reference") return `[tool loaded: ${block.tool_name}]`;
       return "";
     })
     .join("");
@@ -246,11 +285,20 @@ export function toolResultText(content: string | ContentBlock[]): string {
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
+/**
+ * Anthropic `tools[]` entry plus the tool-search beta field. `defer_loading`
+ * tells the API to keep the definition out of the prompt until a
+ * `tool_reference` in the conversation pulls it in. Non-Anthropic
+ * translators strip it before sending.
+ */
+export type ApiToolParam = Anthropic.Tool & { defer_loading?: boolean };
+
 /** Convert a Tool to the Anthropic API `tools` parameter format. */
-export function toolToApiParam(tool: Tool): Anthropic.Tool {
+export function toolToApiParam(tool: Tool, options: { deferLoading?: boolean } = {}): ApiToolParam {
   return {
     name: tool.name,
     description: tool.description,
     input_schema: tool.inputSchema,
+    ...(options.deferLoading && !areExperimentalBetasDisabled() ? { defer_loading: true } : {}),
   };
 }

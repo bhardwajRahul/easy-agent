@@ -14,6 +14,8 @@ const TOOL_NAME = "TaskGet";
 
 export const taskGetTool: Tool = {
   name: TOOL_NAME,
+  searchHint: "retrieve a task by ID",
+  shouldDefer: true,
 
   description: "Retrieve the full details of a single task by id. Always call this before TaskUpdate to read current state.",
 

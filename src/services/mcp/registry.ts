@@ -39,3 +39,15 @@ export function getMcpRegistryEntry(name: string): Entry | undefined {
 export function clearMcpRegistry(): void {
   entries.clear();
 }
+
+/**
+ * Any server still in its `pending` placeholder state? While true, ToolSearch
+ * stays in the request even with an empty deferred pool so the model can
+ * discover the server's tools once it connects.
+ */
+export function hasPendingMcpServers(): boolean {
+  for (const entry of entries.values()) {
+    if (entry.connection.type === "pending") return true;
+  }
+  return false;
+}

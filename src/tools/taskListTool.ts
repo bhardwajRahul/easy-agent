@@ -18,6 +18,8 @@ const TOOL_NAME = "TaskList";
 
 export const taskListTool: Tool = {
   name: TOOL_NAME,
+  searchHint: "list all tasks",
+  shouldDefer: true,
 
   description:
     "List every task in the current session's task graph. Use this before starting work to find the next unblocked task, and after finishing one to see what was unblocked. Prefer tasks in ascending id order when multiple are ready.",

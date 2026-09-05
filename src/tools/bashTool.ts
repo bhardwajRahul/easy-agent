@@ -99,6 +99,7 @@ export function isReadOnlyCommand(command: string): boolean {
 
 export const bashTool: Tool = {
   name: "Bash",
+  searchHint: "execute shell commands",
   description: "Execute a shell command in the current working directory and return stdout/stderr.",
   inputSchema: {
     type: "object" as const,

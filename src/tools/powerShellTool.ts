@@ -32,6 +32,7 @@ function resolveExecutable(): string {
 
 export const powerShellTool: Tool = {
   name: "PowerShell",
+  searchHint: "execute Windows PowerShell commands",
   description:
     "Execute a PowerShell command on Windows and return stdout/stderr. Use this instead of Bash on Windows. Note: not sandboxed.",
   inputSchema: {

@@ -258,6 +258,7 @@ function buildRenderUnits(toolCalls: ToolCallInfo[]): RenderUnit[] {
  * running) — the same grouping the history view applies once results land.
  */
 export function ToolCallList({ toolCalls, leadingMarginTop = 0 }: ToolCallListProps): React.ReactNode {
+  toolCalls = toolCalls.filter((call) => call.name !== "ToolSearch" || call.isError);
   if (toolCalls.length === 0) {
     return null;
   }

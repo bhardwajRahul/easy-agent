@@ -10,6 +10,7 @@ interface FileWriteInput {
 
 export const fileWriteTool: Tool = {
   name: "Write",
+  searchHint: "create or overwrite files",
   description: "Create a file or overwrite an existing file with the provided content.",
   inputSchema: {
     type: "object" as const,

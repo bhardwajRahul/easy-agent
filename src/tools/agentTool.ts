@@ -174,6 +174,7 @@ function formatResult(args: {
 
 export const agentTool: Tool = {
   name: "Agent",
+  searchHint: "delegate work to a subagent",
   description:
     "Delegate a focused subtask to a specialized sub-agent. The sub-agent runs in its own context window with its own tool set, completes the task, and returns a concise summary. " +
     "Use this when the subtask requires multiple tool calls (search, read many files, etc.) and you want to keep the main conversation context clean. " +

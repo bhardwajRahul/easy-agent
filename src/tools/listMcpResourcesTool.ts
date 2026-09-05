@@ -35,6 +35,8 @@ function connectedServers(): ConnectedMcpServer[] {
 
 export const listMcpResourcesTool: Tool = {
   name: "ListMcpResources",
+  searchHint: "list resources from connected MCP servers",
+  shouldDefer: true,
   description:
     "List resources available from connected MCP servers. Optionally filter to a single server. Returns resource URIs you can read with ReadMcpResource.",
   inputSchema: {

@@ -39,6 +39,7 @@ function validateEdits(value: unknown): value is SingleEdit[] {
 
 export const multiEditTool: Tool = {
   name: "MultiEdit",
+  searchHint: "apply several edits to one file atomically",
   description:
     "Apply multiple find/replace edits to a single file atomically and in order. Each edit sees the result of the previous one. If any edit fails to match, no changes are written.",
   inputSchema: {

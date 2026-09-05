@@ -77,6 +77,8 @@ async function applyPromptToContent(
 
 export const webFetchTool: Tool = {
   name: "WebFetch",
+  searchHint: "fetch and extract content from a URL",
+  shouldDefer: true,
   description:
     "Fetch content from a URL and extract information from it using a prompt. Converts HTML to markdown. Use for reading documentation and public web pages. WILL FAIL for authenticated/private URLs — prefer a dedicated MCP tool for those.",
   inputSchema: {

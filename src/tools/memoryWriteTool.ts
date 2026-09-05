@@ -4,6 +4,7 @@ import type { Tool, ToolResult } from "./Tool.js";
 
 export const memoryWriteTool: Tool = {
   name: "MemoryWrite",
+  searchHint: "persist project memory notes across sessions",
   description:
     "Save durable project memory for future conversations. Only store information that cannot be derived directly from the current repository state.",
   inputSchema: {

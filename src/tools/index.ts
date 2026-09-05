@@ -36,6 +36,7 @@ import { agentTool } from "./agentTool.js";
 import { teamCreateTool } from "./teamCreateTool.js";
 import { teamDeleteTool } from "./teamDeleteTool.js";
 import { sendMessageTool } from "./sendMessageTool.js";
+import { toolSearchTool } from "./toolSearchTool.js";
 import type { PermissionMode } from "../permissions/permissions.js";
 
 const BUILTIN_TOOLS: Tool[] = [
@@ -69,6 +70,10 @@ const BUILTIN_TOOLS: Tool[] = [
   teamCreateTool,
   teamDeleteTool,
   sendMessageTool,
+  // ToolSearch gates itself on isToolSearchEnabledOptimistic() — present
+  // whenever tool search *might* be on; the per-request shaping in
+  // utils/toolSearch.ts drops it again when the definitive check says no.
+  toolSearchTool,
 ];
 
 let mcpTools: Tool[] = [];
@@ -108,9 +113,19 @@ export function findToolByName(name: string): Tool | undefined {
  * `annotations.readOnlyHint`).
  */
 export function getToolsApiParams(mode?: PermissionMode): Anthropic.Tool[] {
+  return getToolsForMode(mode).map((t) => toolToApiParam(t));
+}
+
+/**
+ * Same mode-aware selection as `getToolsApiParams`, but returning the Tool
+ * objects. The agentic loop needs the objects (not just API params) so the
+ * tool-search layer can read `shouldDefer` / `isMcp` / `alwaysLoad` when
+ * shaping each request.
+ */
+export function getToolsForMode(mode?: PermissionMode): Tool[] {
   const tools = getAllTools();
   if (mode === "plan") {
-    return tools.filter((t) => t.name !== "EnterPlanMode").map(toolToApiParam);
+    return tools.filter((t) => t.name !== "EnterPlanMode");
   }
-  return tools.filter((t) => t.name !== "ExitPlanMode").map(toolToApiParam);
+  return tools.filter((t) => t.name !== "ExitPlanMode");
 }

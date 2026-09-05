@@ -32,6 +32,8 @@ function buildAllowRulesFromPrompts(prompts: AllowedPrompt[]): string[] {
 
 export const exitPlanModeTool: Tool = {
   name: "ExitPlanMode",
+  searchHint: "present plan for approval and start coding (plan mode only)",
+  shouldDefer: true,
 
   description:
     "Exit plan mode and return to normal execution mode. " +

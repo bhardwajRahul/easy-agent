@@ -46,6 +46,7 @@ import {
   type EffortLevel,
 } from "../../../utils/thinking.js";
 import { normalizeStopReason } from "./translateShared.js";
+import { renderToolReferencesAsText, stripDeferLoading } from "../../../utils/toolSearch.js";
 import {
   buildGeminiContents,
   isThoughtSignatureError,
@@ -139,12 +140,19 @@ export function prepareRequest(profile: ModelProfile, params: StreamRequestParam
   }
   const provider = LLM_BRIDGE_PROVIDER[profile.protocol];
 
+  // ToolSearch fallback for providers without server-side tool_reference
+  // expansion: render each reference as the <functions> block the model
+  // already knows from the prompt head, and drop the beta-only
+  // `defer_loading` field (unknown keys 400 on strict endpoints).
+  const providerTools = params.tools && params.tools.length > 0 ? stripDeferLoading(params.tools) : undefined;
+  const providerMessages = renderToolReferencesAsText(params.messages, params.tools ?? []);
+
   const anthropicBody = {
     model: profile.model,
     max_tokens: profile.maxTokens ?? params.maxTokens ?? DEFAULT_MAX_TOKENS,
-    messages: params.messages,
+    messages: providerMessages,
     ...(params.system ? { system: params.system } : {}),
-    ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
+    ...(providerTools ? { tools: providerTools } : {}),
     ...(params.toolChoice ? { tool_choice: params.toolChoice } : {}),
   } as unknown as AnthropicBody;
 
@@ -157,7 +165,7 @@ export function prepareRequest(profile: ModelProfile, params: StreamRequestParam
     // Rebuild `contents` from our own blocks so each functionCall keeps its
     // exact thoughtSignature + id and thinking parts are not fabricated back
     // (llm-bridge mishandles both, breaking Gemini-3 multi/parallel tool turns).
-    translated.contents = buildGeminiContents(params.messages);
+    translated.contents = buildGeminiContents(providerMessages);
 
     // Stage 34: request-side thinking. Gemini expresses thinking via
     // generationConfig.thinkingConfig — includeThoughts surfaces the

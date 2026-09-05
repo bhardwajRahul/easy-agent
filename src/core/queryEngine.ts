@@ -18,7 +18,7 @@ import { autoCompactIfNeeded, calculateTokenWarningState } from "../context/auto
 import { tokenCountWithEstimation } from "../utils/tokens.js";
 import { formatProjectSessionHistory } from "../session/history.js";
 import { fileHistoryMakeSnapshot } from "../session/fileHistory.js";
-import { getToolsApiParams } from "../tools/index.js";
+import { getToolsForMode } from "../tools/index.js";
 import { buildUserMessageContent } from "./attachImages.js";
 import type { ToolContext } from "../tools/Tool.js";
 import type { Usage } from "../types/message.js";
@@ -744,7 +744,7 @@ export class QueryEngine {
       const loop = query({
         messages: [...this.messages],
         systemPrompt,
-        getTools: () => getToolsApiParams(this.currentPermissionMode),
+        getTools: () => getToolsForMode(this.currentPermissionMode),
         model: this.getActiveModel(),
         abortSignal: abortController.signal,
         toolContext: enrichedToolContext,

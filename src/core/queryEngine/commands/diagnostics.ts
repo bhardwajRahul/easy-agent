@@ -6,7 +6,10 @@
  * and yields the same QueryEngineEvent stream the original methods produced.
  */
 
-import { getAllTools, getToolsApiParams } from "../../../tools/index.js";
+import { getAllTools, getToolsForMode } from "../../../tools/index.js";
+import { resolveProfile } from "../../../services/api/providers/profile.js";
+import { hasPendingMcpServers } from "../../../services/mcp/registry.js";
+import { prepareToolSearchRequest } from "../../../utils/toolSearch.js";
 import { getMcpRegistry } from "../../../services/mcp/registry.js";
 import { getTaskMode } from "../../../state/taskModeStore.js";
 import { getActiveOutputStyleName } from "../../../styles/registry.js";
@@ -79,7 +82,18 @@ export async function* handleContextCommand(
 
   const systemParts = await buildSystemPrompt({ cwd });
   const systemPrompt = renderSystemPrompt(systemParts);
-  const toolsJson = JSON.stringify(getToolsApiParams(ctx.getPermissionMode()));
+  // Mirror the real request: with tool search on, deferred tools that
+  // haven't been loaded cost nothing — only the shaped `tools[]` counts.
+  const profile = await resolveProfile(model, cwd);
+  const shaped = prepareToolSearchRequest({
+    tools: getToolsForMode(ctx.getPermissionMode()),
+    messages,
+    model: profile.model,
+    env: { protocol: profile.protocol, baseURL: profile.baseURL ?? process.env.ANTHROPIC_BASE_URL },
+    hasPendingMcpServers: hasPendingMcpServers(),
+    source: "context",
+  });
+  const toolsJson = JSON.stringify(shaped.tools);
   const [agentMd, memoryEntry] = await Promise.all([
     loadAgentMdContext(cwd).catch(() => null),
     readMemoryEntrypoint(cwd).catch(() => null),
@@ -123,6 +137,17 @@ export async function* handleContextCommand(
     "",
     `Estimated used: ${fmt(used)} / ${fmt(contextWindow)} (${pct(used)})`,
   ];
+  if (shaped.enabled) {
+    const loaded = [...shaped.deferredToolNames].filter((n) => shaped.discoveredToolNames.has(n));
+    lines.push(
+      "",
+      `Tool search: on — ${shaped.deferredToolNames.size} deferred tool(s), ${loaded.length} loaded via ToolSearch` +
+        (loaded.length > 0 ? ` (${loaded.join(", ")})` : ""),
+      `  Always loaded: ${shaped.tools.length - loaded.length} tool(s), ~${roughJson(JSON.stringify(shaped.tools.filter((t) => !shaped.deferredToolNames.has(t.name))))} tok`,
+      `  Deferred loaded: ${loaded.length} tool(s), ~${loaded.length ? roughJson(JSON.stringify(shaped.tools.filter((t) => shaped.deferredToolNames.has(t.name)))) : 0} tok`,
+      `  Deferred not loaded: ${shaped.deferredToolNames.size - loaded.length} tool(s), 0 schema tok`,
+    );
+  }
   if (snapshot.estimatedConversationTokens >= snapshot.autoCompactThreshold) {
     lines.push("", "⚠ Approaching the auto-compact threshold — consider /compact.");
   }

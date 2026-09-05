@@ -37,6 +37,8 @@ import {
   getSessionEffortLevel,
 } from "../../utils/thinking.js";
 import { writeStreamDebug } from "../../utils/streamDebug.js";
+import type { ApiToolParam } from "../../tools/Tool.js";
+import { normalizeToolReferencesForAPI } from "../../utils/toolSearch.js";
 import {
   classifyAPIError,
   getUserFacingErrorMessage,
@@ -57,7 +59,22 @@ export interface StreamRequestParams {
   model?: string;
   maxTokens?: number;
   system?: string;
-  tools?: Anthropic.Tool[];
+  tools?: ApiToolParam[];
+  /**
+   * Whether tool search is active for this request (decided upstream by
+   * `prepareToolSearchRequest`). Drives the tool_reference normalization:
+   * off → every tool_reference in history is stripped (the API rejects the
+   * beta shape without its header); on → only references to tools missing
+   * from `tools` are stripped and the turn-boundary sibling is added.
+   * Defaults to false — safe for internal single-shot callers.
+   */
+  toolSearchEnabled?: boolean;
+  /**
+   * Extra `anthropic-beta` header values requested upstream (e.g. the
+   * tool-search beta). Merged with the ones this layer derives itself.
+   * Ignored by non-Anthropic translators.
+   */
+  betaHeaders?: string[];
   /**
    * Forces a particular tool-use behavior (e.g. `{ type: "tool", name }` to
    * make the model emit exactly one structured tool call). Used by internal
@@ -144,7 +161,7 @@ async function* streamOnce(
     }
   }
 
-  const betaHeaders: string[] = [];
+  const betaHeaders: string[] = [...(params.betaHeaders ?? [])];
   if (hasThinking && modelSupportsInterleavedThinking(model) && !process.env.DISABLE_INTERLEAVED_THINKING) {
     betaHeaders.push("interleaved-thinking-2025-05-14");
   }
@@ -162,11 +179,12 @@ async function* streamOnce(
   // endpoint that issued them, so a change strips them (mirrors source's
   // stripSignatureBlocks on credential change).
   const endpointKey = `${profile.baseURL ?? ""}|${model}`;
-  const normalizedMessages = normalizeMessagesForAPI(
-    params.messages,
-    model,
-    thinkingParam !== undefined,
-    endpointKey,
+  const normalizedMessages = normalizeToolReferencesForAPI(
+    normalizeMessagesForAPI(params.messages, model, thinkingParam !== undefined, endpointKey),
+    {
+      toolSearchEnabled: params.toolSearchEnabled === true,
+      availableToolNames: new Set((params.tools ?? []).map((t) => t.name)),
+    },
   );
   const baseParams = {
     model,
@@ -569,7 +587,15 @@ export async function createMessage(
   // Background single-shot calls never enable thinking, so normalize the
   // history with thinkingOn=false: this strips signatures + trailing/orphan
   // thinking blocks that would otherwise 400 a thinking-disabled request.
-  const bgMessages = normalizeMessagesForAPI(params.messages, model, false);
+  // Single-shot callers default to tool search off. Explicitly enabled
+  // callers get the same reference normalization as the streaming path.
+  const bgMessages = normalizeToolReferencesForAPI(
+    normalizeMessagesForAPI(params.messages, model, false),
+    {
+      toolSearchEnabled: params.toolSearchEnabled === true,
+      availableToolNames: new Set((params.tools ?? []).map((t) => t.name)),
+    },
+  );
   const response = await callWithRetry(
     () =>
       client.messages.create({
@@ -579,7 +605,7 @@ export async function createMessage(
         ...(params.system && { system: params.system }),
         ...(params.tools && params.tools.length > 0 && { tools: params.tools }),
         ...(params.toolChoice && { tool_choice: params.toolChoice }),
-      }),
+      }, params.betaHeaders?.length ? { headers: { "anthropic-beta": params.betaHeaders.join(",") } } : undefined),
     {
       querySource: params.querySource ?? "background",
       onRetry: ({ attempt, delayMs, category }) =>

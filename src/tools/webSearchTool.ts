@@ -35,6 +35,8 @@ function formatResults(query: string, results: SearchResult[]): string {
 
 export const webSearchTool: Tool = {
   name: "WebSearch",
+  searchHint: "search the web for current information",
+  shouldDefer: true,
   description:
     "Search the web and return a list of relevant result links with snippets. Use it to find current information, then WebFetch a specific result for details.",
   inputSchema: {

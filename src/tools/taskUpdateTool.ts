@@ -62,6 +62,8 @@ function mergeMetadata(
 
 export const taskUpdateTool: Tool = {
   name: TOOL_NAME,
+  searchHint: "update a task",
+  shouldDefer: true,
 
   description:
     "Update a task in the persistent task graph. Use this to mark progress " +

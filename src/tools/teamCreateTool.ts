@@ -66,6 +66,8 @@ function readInput(raw: Record<string, unknown>): TeamCreateInput {
 
 export const teamCreateTool: Tool = {
   name: "TeamCreate",
+  searchHint: "create a multi-agent swarm team",
+  shouldDefer: true,
   description:
     "Spin up a new Agent Teams session. The current Easy Agent process becomes the team lead. " +
     "After this call you can spawn named teammates via `Agent({ name: \"<name>\", team_name: \"<team>\", run_in_background: true, ... })` and message them with `SendMessage`. " +

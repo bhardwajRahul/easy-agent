@@ -92,10 +92,21 @@ function buildToolAdapter(connection: ConnectedMcpServer, mcpTool: McpTool): Too
     properties: {},
   }) as Tool["inputSchema"];
 
+  // ToolSearch metadata. MCP tools are deferred by default (workflow-specific);
+  // a server can opt a tool out with `_meta['anthropic/alwaysLoad']` and
+  // supply a curated keyword phrase via `_meta['anthropic/searchHint']`.
+  const meta = (mcpTool as { _meta?: Record<string, unknown> })._meta;
+  const searchHint =
+    typeof meta?.["anthropic/searchHint"] === "string" ? (meta["anthropic/searchHint"] as string) : undefined;
+  const alwaysLoad = meta?.["anthropic/alwaysLoad"] === true;
+
   return {
     name: fullName,
     description,
     inputSchema,
+    isMcp: true,
+    ...(searchHint ? { searchHint } : {}),
+    ...(alwaysLoad ? { alwaysLoad: true } : {}),
     isReadOnly: () => isReadOnly,
     isEnabled: () => true,
     async call(rawInput: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {

@@ -520,8 +520,8 @@ async function main(): Promise<void> {
     assert(infoMessage.includes("general-purpose"), "/agents includes general-purpose");
     assert(infoMessage.includes("Explore"), "/agents includes Explore");
     assert(infoMessage.includes("code-reviewer"), "/agents includes custom project agent");
-    assert(infoMessage.includes("[built-in]"), "/agents tags built-in source");
-    assert(infoMessage.includes("[project]"), "/agents tags project source");
+    assert(infoMessage.includes("built-in · tools:"), "/agents tags built-in source");
+    assert(infoMessage.includes("project · tools:"), "/agents tags project source");
     assert(infoMessage.includes("tools: Read,Grep,Glob"), "/agents shows tools allow-list");
     assert(infoMessage.includes("disallowed: Write,Edit"), "/agents shows disallowedTools");
     assert(infoMessage.includes("model: claude-haiku-4.5"), "/agents shows model override");
@@ -627,7 +627,7 @@ async function main(): Promise<void> {
       const safeResult = await runTools(
         safeBlocks,
         { cwd: process.cwd(), sessionId: "concurrency-test" },
-        { permissionMode: "auto", permissionSettings: { allow: [], deny: [], mode: "auto" }, sessionPermissionRules: { allow: [], deny: [] } },
+        { permissionMode: "default", sessionPermissionRules: { allow: ["ProbeSafe", "ProbeUnsafe"], deny: [] } },
       );
       const safeElapsed = Date.now() - safeStart;
       assert(safeResult.executions.length === 4, "all 4 safe blocks executed");
@@ -651,7 +651,7 @@ async function main(): Promise<void> {
       await runTools(
         unsafeBlocks,
         { cwd: process.cwd(), sessionId: "concurrency-test" },
-        { permissionMode: "auto", permissionSettings: { allow: [], deny: [], mode: "auto" }, sessionPermissionRules: { allow: [], deny: [] } },
+        { permissionMode: "default", sessionPermissionRules: { allow: ["ProbeSafe", "ProbeUnsafe"], deny: [] } },
       );
       assert(unsafePeak === 1, `unsafe tools serialized (peak=${unsafePeak})`);
 
@@ -670,7 +670,7 @@ async function main(): Promise<void> {
       const mixed = await runTools(
         mixedBlocks,
         { cwd: process.cwd(), sessionId: "concurrency-test" },
-        { permissionMode: "auto", permissionSettings: { allow: [], deny: [], mode: "auto" }, sessionPermissionRules: { allow: [], deny: [] } },
+        { permissionMode: "default", sessionPermissionRules: { allow: ["ProbeSafe", "ProbeUnsafe"], deny: [] } },
       );
       assert(mixed.executions.length === 5, "mixed batch: all 5 executed");
       assert(

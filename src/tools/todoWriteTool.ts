@@ -67,6 +67,8 @@ function parseTodos(input: Record<string, unknown>): TodoItem[] | { error: strin
 
 export const todoWriteTool: Tool = {
   name: TODO_WRITE_TOOL_NAME,
+  searchHint: "manage the session task checklist",
+  shouldDefer: true,
 
   description:
     "Update the todo list for the current session. To be used proactively and often to track progress and pending tasks. " +

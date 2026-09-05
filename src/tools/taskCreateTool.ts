@@ -24,6 +24,8 @@ function pickString(input: Record<string, unknown>, key: string): string | undef
 
 export const taskCreateTool: Tool = {
   name: TOOL_NAME,
+  searchHint: "create a task in the task list",
+  shouldDefer: true,
 
   description:
     "Create a structured task for the current session's persistent task graph. " +

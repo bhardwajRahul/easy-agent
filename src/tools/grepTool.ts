@@ -32,6 +32,7 @@ async function isDirectory(filePath: string): Promise<boolean> {
 
 export const grepTool: Tool = {
   name: "Grep",
+  searchHint: "search file contents with regex (ripgrep)",
   description: "Search file contents by regex pattern. Prefer this over Bash for code search.",
   inputSchema: {
     type: "object" as const,
