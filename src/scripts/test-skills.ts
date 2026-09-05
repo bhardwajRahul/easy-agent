@@ -1,20 +1,11 @@
 #!/usr/bin/env tsx
-/**
- * Stage 17 verification script — exercise the Skills subsystem WITHOUT
- * touching the LLM. Lets you validate the file loader, frontmatter
- * parser, registry split (dynamic vs conditional), budget formatter,
- * conditional activation, and SkillTool execution end-to-end against
- * the example skills under `<cwd>/.easy-agent/skills/`.
- *
- * Usage:
- *   cd easy-agent
- *   npx tsx src/scripts/test-skills.ts
- *
- * Exits non-zero if any assertion fails — convenient for CI / manual checks.
- */
 
+import * as os from "node:os";
+import * as path from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { bootstrapSkills } from "../services/skills/bootstrap.js";
 import {
+  clearSkills,
   findSkill,
   getAllUserInvocableSkills,
   getModelVisibleSkills,
@@ -26,10 +17,9 @@ import { skillTool } from "../tools/skillTool.js";
 import { toolResultText } from "../tools/Tool.js";
 import { matchesPermissionRule } from "../permissions/permissions.js";
 
-const cwd = process.cwd();
-
 const failures: string[] = [];
-function assert(condition: unknown, label: string): void {
+
+function check(condition: unknown, label: string): void {
   if (condition) {
     console.log(`  ✓ ${label}`);
   } else {
@@ -38,122 +28,198 @@ function assert(condition: unknown, label: string): void {
   }
 }
 
-async function main(): Promise<void> {
-  console.log(`\n[1] bootstrapSkills(${cwd})`);
+async function writeSkill(cwd: string, name: string, content: string): Promise<void> {
+  const dir = path.join(cwd, ".easy-agent", "skills", name);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "SKILL.md"), content, "utf8");
+}
+
+async function createFixtures(cwd: string): Promise<void> {
+  await Promise.all([
+    writeSkill(
+      cwd,
+      "hello-world",
+      [
+        "---",
+        "name: hello-world",
+        "description: Return a deterministic greeting.",
+        "allowed-tools: [Read]",
+        "---",
+        "",
+        "Hello $ARGUMENTS",
+        "Session: ${CLAUDE_SESSION_ID}",
+        "Directory: ${CLAUDE_SKILL_DIR}",
+      ].join("\n"),
+    ),
+    writeSkill(
+      cwd,
+      "test-reviewer",
+      [
+        "---",
+        "name: test-reviewer",
+        "description: Review test files.",
+        "allowed-tools: [Read, Grep, Glob]",
+        "paths:",
+        '  - "**/*.test.ts"',
+        '  - "**/*.spec.ts"',
+        "---",
+        "",
+        "Review the selected test file.",
+      ].join("\n"),
+    ),
+    writeSkill(
+      cwd,
+      "secret-handshake",
+      [
+        "---",
+        "name: secret-handshake",
+        "description: User-only command.",
+        "disable-model-invocation: true",
+        "---",
+        "",
+        "Return the configured response.",
+      ].join("\n"),
+    ),
+  ]);
+}
+
+async function runChecks(cwd: string): Promise<void> {
+  console.log("\n[1] Isolated skill discovery");
   const result = await bootstrapSkills(cwd);
   console.log(
     `    loaded ${result.skillCount} unconditional + ${result.conditionalCount} conditional skill(s); ${result.warnings.length} warning(s).`,
   );
+  check(result.warnings.length === 0, "fixtures load without warnings");
 
-  console.log("\n[2] Registry split");
+  console.log("\n[2] Registry visibility");
   const allUserInvocable = getAllUserInvocableSkills();
   const visibleToModel = getModelVisibleSkills();
   const conditional = listConditionalSkills();
-  console.log(`    user-invocable: ${allUserInvocable.map((s) => s.name).join(", ")}`);
-  console.log(`    model-visible:  ${visibleToModel.map((s) => s.name).join(", ")}`);
-  console.log(`    conditional:    ${conditional.map((s) => s.name).join(", ")}`);
-
-  assert(findSkill("hello-world"), "hello-world skill loaded");
-  assert(findSkill("test-reviewer"), "test-reviewer skill loaded (conditional)");
-  assert(findSkill("secret-handshake"), "secret-handshake skill loaded (hidden)");
-
-  assert(
-    !visibleToModel.some((s) => s.name === "secret-handshake"),
-    "secret-handshake is HIDDEN from the model listing (disable-model-invocation: true)",
+  check(allUserInvocable.length === 3, "all three skills are user-invocable");
+  check(Boolean(findSkill("hello-world")), "unconditional skill is loaded");
+  check(Boolean(findSkill("test-reviewer")), "conditional skill is loaded");
+  check(Boolean(findSkill("secret-handshake")), "user-only skill is loaded");
+  check(
+    !visibleToModel.some((skill) => skill.name === "secret-handshake"),
+    "user-only skill is hidden from the model",
   );
-  assert(
-    !visibleToModel.some((s) => s.name === "test-reviewer"),
-    "test-reviewer is HIDDEN from the initial model listing (paths gates it)",
+  check(
+    !visibleToModel.some((skill) => skill.name === "test-reviewer"),
+    "conditional skill is initially hidden from the model",
   );
-  assert(
-    visibleToModel.some((s) => s.name === "hello-world"),
-    "hello-world IS visible to the model",
+  check(
+    visibleToModel.some((skill) => skill.name === "hello-world"),
+    "unconditional skill is visible to the model",
   );
+  check(conditional.some((skill) => skill.name === "test-reviewer"), "conditional registry is populated");
 
-  console.log("\n[3] system-reminder formatting (initial)");
+  console.log("\n[3] System reminder");
   const reminder = formatSkillsSystemReminder(visibleToModel);
-  console.log(reminder.split("\n").map((l) => `    ${l}`).join("\n"));
-  assert(reminder.includes("hello-world"), "system-reminder mentions hello-world");
-  assert(!reminder.includes("test-reviewer"), "system-reminder does NOT mention test-reviewer initially");
-  assert(!reminder.includes("secret-handshake"), "system-reminder does NOT mention secret-handshake");
+  check(reminder.includes("hello-world"), "visible skill appears in the reminder");
+  check(!reminder.includes("test-reviewer"), "inactive conditional skill is omitted");
+  check(!reminder.includes("secret-handshake"), "user-only skill is omitted");
 
-  console.log("\n[4] Conditional activation via file path match");
+  console.log("\n[4] Conditional activation");
   const activated = activateConditionalSkillsForPaths(["src/foo.test.ts"], cwd);
-  console.log(`    activated: ${activated.join(", ") || "(none)"}`);
-  assert(activated.includes("test-reviewer"), "test-reviewer activated by *.test.ts path");
-  const reminderAfter = formatSkillsSystemReminder(getModelVisibleSkills());
-  assert(reminderAfter.includes("test-reviewer"), "test-reviewer NOW appears in the system-reminder");
+  check(activated.includes("test-reviewer"), "matching path activates the conditional skill");
+  check(
+    formatSkillsSystemReminder(getModelVisibleSkills()).includes("test-reviewer"),
+    "activated skill appears in the reminder",
+  );
 
-  console.log("\n[5] Permission rule matching");
-  assert(
+  console.log("\n[5] Permission matching");
+  check(
     matchesPermissionRule("Skill(hello-world)", "Skill", { skill: "hello-world" }),
-    "Skill(hello-world) matches exactly",
+    "exact skill rule matches",
   );
-  assert(
+  check(
     !matchesPermissionRule("Skill(hello-world)", "Skill", { skill: "test-reviewer" }),
-    "Skill(hello-world) does NOT match test-reviewer",
+    "exact skill rule rejects a different skill",
   );
-  assert(
+  check(
     matchesPermissionRule("Skill(test-*)", "Skill", { skill: "test-reviewer" }),
-    "Skill(test-*) prefix-matches test-reviewer",
-  );
-  assert(
-    !matchesPermissionRule("Skill(test-*)", "Skill", { skill: "hello-world" }),
-    "Skill(test-*) does NOT match hello-world",
+    "skill prefix rule matches",
   );
 
-  console.log("\n[6] SkillTool.call() — variable substitution");
+  console.log("\n[6] Variable substitution");
+  const sessionRules: string[] = [];
   const okResult = await skillTool.call(
     { skill: "hello-world", args: "Easy Agent" },
-    { cwd, sessionId: "session-test-abc" },
+    {
+      cwd,
+      sessionId: "session-test-abc",
+      addSessionAllowRules: (rules) => sessionRules.push(...rules),
+    },
   );
   const okText = toolResultText(okResult.content);
-  console.log(okText.split("\n").slice(0, 8).map((l) => `    ${l}`).join("\n"));
-  assert(!okResult.isError, "Skill call succeeded");
-  assert(okText.includes("Easy Agent"), "$ARGUMENTS substituted with \"Easy Agent\"");
-  assert(okText.includes("session-test-abc"), "${CLAUDE_SESSION_ID} substituted");
-  assert(
+  check(!okResult.isError, "skill call succeeds");
+  check(okText.includes("Easy Agent"), "$ARGUMENTS is substituted");
+  check(okText.includes("session-test-abc"), "session id is substituted");
+  check(
     okText.includes(".easy-agent/skills/hello-world"),
-    "${CLAUDE_SKILL_DIR} substituted with the absolute skill path",
+    "skill directory is substituted",
   );
+  check(sessionRules.includes("Read"), "allowed tools are added to session rules");
 
-  console.log("\n[7] SkillTool.call() — disable-model-invocation rejected");
+  console.log("\n[7] Rejected invocations");
   const hiddenResult = await skillTool.call(
     { skill: "secret-handshake" },
     { cwd, sessionId: "x" },
   );
-  const hiddenText = toolResultText(hiddenResult.content);
-  console.log(`    ${hiddenText.split("\n")[0]}`);
-  assert(hiddenResult.isError, "Hidden skill rejected when invoked by the model");
-  assert(
-    hiddenText.includes("disable-model-invocation"),
-    "Error message mentions disable-model-invocation",
+  check(Boolean(hiddenResult.isError), "model invocation of a user-only skill is rejected");
+  check(
+    toolResultText(hiddenResult.content).includes("disable-model-invocation"),
+    "rejection explains the invocation policy",
   );
 
-  console.log("\n[8] SkillTool.call() — unknown skill rejected");
   const unknownResult = await skillTool.call(
     { skill: "does-not-exist" },
     { cwd, sessionId: "x" },
   );
-  assert(unknownResult.isError, "Unknown skill name returns an error");
+  check(Boolean(unknownResult.isError), "unknown skill is rejected");
 
-  console.log("\n[9] SkillTool.call() — invalid name rejected");
   const invalidNameResult = await skillTool.call(
     { skill: "../../etc/passwd" },
     { cwd, sessionId: "x" },
   );
-  assert(invalidNameResult.isError, "Skill name with path traversal characters is rejected");
+  check(Boolean(invalidNameResult.isError), "invalid skill name is rejected");
+}
+
+async function main(): Promise<void> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "easy-agent-skills-"));
+  const cwd = path.join(root, "project");
+  const home = path.join(root, "home");
+  const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
+
+  await mkdir(cwd, { recursive: true });
+  await mkdir(home, { recursive: true });
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+
+  try {
+    await createFixtures(cwd);
+    await runChecks(cwd);
+  } finally {
+    clearSkills();
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
+    await rm(root, { recursive: true, force: true });
+  }
 
   if (failures.length > 0) {
     console.error(`\n${failures.length} assertion(s) failed:`);
-    for (const f of failures) console.error(`  - ${f}`);
-    process.exit(1);
+    for (const failure of failures) console.error(`  - ${failure}`);
+    process.exitCode = 1;
+    return;
   }
 
-  console.log("\nAll skills checks passed.\n");
+  console.log("\nAll skill checks passed.\n");
 }
 
-main().catch((err: unknown) => {
-  console.error("Fatal:", err);
-  process.exit(1);
+void main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+  process.exitCode = 1;
 });

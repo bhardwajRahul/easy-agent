@@ -87,6 +87,10 @@ function normalize(text: string): string {
   out = out.replace(/[✓⚠✗] Endpoint (reachable|not reachable)[^\n]*/g, "<ENDPOINT_PROBE>");
   // /doctor: API-auth-token status depends on the ambient environment — collapse it.
   out = out.replace(/[✓✗] (API auth token present|No API auth token)[^\n]*/g, "<AUTH_TOKEN>");
+  // Clipboard executables and error hints vary by platform. The test disables
+  // executable discovery while exercising /copy, so it never changes the
+  // developer's clipboard; normalize the resulting platform-specific detail.
+  out = out.replace(/Could not copy to clipboard:[^\n]*/g, "<CLIPBOARD_RESULT>");
   // Empty command-output rows are formatted as `"  | "` for readability in
   // memory, but the golden should not carry invisible trailing whitespace.
   return out.split("\n").map((line) => line.trimEnd()).join("\n");
@@ -209,9 +213,11 @@ async function buildRecording(): Promise<string> {
   // test fail). Node's os.homedir() observes HOME on POSIX, matching the
   // isolation strategy used by the stage-specific integration suites.
   const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
   const isolatedHome = path.join(tmpRoot, "home");
   await mkdir(isolatedHome, { recursive: true });
   process.env.HOME = isolatedHome;
+  process.env.USERPROFILE = isolatedHome;
   registerPathReplacement(tmpRoot, "<TMP>");
   registerPathReplacement(os.tmpdir(), "<TMPDIR>");
 
@@ -292,19 +298,34 @@ async function buildRecording(): Promise<string> {
     return [await record(e, "/context")];
   });
 
-  // doctor (network probe normalized away) ------------------------------------
-  await section("doctor", async () => [await record(makeEngine(isolatedCwd), "/doctor")]);
+  // doctor --------------------------------------------------------------------
+  await section("doctor", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 401 })) as typeof fetch;
+    try {
+      return [await record(makeEngine(isolatedCwd), "/doctor")];
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 
   // copy ----------------------------------------------------------------------
   await section("copy", async () => {
     const empty = makeEngine(isolatedCwd);
     const seeded = makeEngine(isolatedCwd, { initialMessages: SEED_MESSAGES });
-    return [
-      await record(empty, "/copy"),
-      await record(seeded, "/copy"),
-      await record(seeded, "/copy 99"),
-      await record(seeded, "/copy abc"),
-    ];
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      return [
+        await record(empty, "/copy"),
+        await record(seeded, "/copy"),
+        await record(seeded, "/copy 99"),
+        await record(seeded, "/copy abc"),
+      ];
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
   });
 
   // export --------------------------------------------------------------------
@@ -428,6 +449,8 @@ async function buildRecording(): Promise<string> {
   const recording = normalize(sections.join("\n\n"));
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = originalUserProfile;
   await rm(tmpRoot, { recursive: true, force: true });
 
   return recording;

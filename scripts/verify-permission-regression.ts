@@ -6,9 +6,6 @@
  * Run:  npx tsx scripts/verify-permission-regression.ts
  */
 
-import { loadEnv } from "../src/utils/loadEnv.js";
-loadEnv();
-
 import {
   checkPermission,
   type PermissionMode,

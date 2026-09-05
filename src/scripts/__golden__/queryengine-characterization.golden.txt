@@ -146,7 +146,7 @@ command[info]:
   | - Output style: default
   | - Messages in context: 2
   | - Session tokens: in 100 / out 50
-  | - Tools enabled (21): Read, Write, Edit, MultiEdit, Glob, Grep, Bash, WebFetch, WebSearch, ListMcpResources, ReadMcpResource, MemoryWrite, TaskCreate, TaskUpdate, TaskGet, TaskList, EnterPlanMode, ExitPlanMode, Skill, AskUserQuestion, Agent
+  | - Tools enabled (22): Read, Write, Edit, MultiEdit, Glob, Grep, Bash, WebFetch, WebSearch, ListMcpResources, ReadMcpResource, MemoryWrite, TaskCreate, TaskUpdate, TaskGet, TaskList, EnterPlanMode, ExitPlanMode, Skill, AskUserQuestion, Agent, ToolSearch
   | - MCP servers: none configured
 <<< handled=true
 
@@ -159,11 +159,16 @@ command[info]:
   |
   |   System prompt          ░░░░░░░░░░░░░░░░░░░░   0.8%  1,564 tok
   |   AGENT.md + memory      ░░░░░░░░░░░░░░░░░░░░   0.0%  4 tok
-  |   Tool definitions       █░░░░░░░░░░░░░░░░░░░   3.8%  7,616 tok
+  |   Tool definitions       ░░░░░░░░░░░░░░░░░░░░   2.5%  4,932 tok
   |   Conversation history   ░░░░░░░░░░░░░░░░░░░░   0.0%  42 tok
-  |   Free space             ███████████████████░  95.4%  190,774 tok
+  |   Free space             ███████████████████░  96.7%  193,458 tok
   |
-  | Estimated used: 9,226 / 200,000 (4.6%)
+  | Estimated used: 6,542 / 200,000 (3.3%)
+  |
+  | Tool search: on — 10 deferred tool(s), 0 loaded via ToolSearch
+  |   Always loaded: 11 tool(s), ~4932 tok
+  |   Deferred loaded: 0 tool(s), ~0 tok
+  |   Deferred not loaded: 10 tool(s), 0 schema tok
 <<< handled=true
 
 ### doctor
@@ -188,9 +193,8 @@ command[info]:
 <<< handled=true
 
 >>> /copy
-command[info]:
-  | Copied reply #1 to clipboard (10 chars, via pbcopy).
-  |   2 + 2 = 4.
+command[error]:
+  | <CLIPBOARD_RESULT>
 <<< handled=true
 
 >>> /copy 99
