@@ -1,7 +1,10 @@
 import * as path from "node:path";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.js";
 import type { Tool } from "../tools/Tool.js";
-import { isReadOnlyCommand } from "../tools/bashTool.js";
+import {
+  analyzeBashCommand,
+  type BashReadOnlyAnalysis,
+} from "../tools/bashReadOnlyAnalysis.js";
 import { getPlanFilePath } from "../context/plans.js";
 import { loadSettingSources, isTrustedScopeForSensitiveKeys } from "../config/sources.js";
 import {
@@ -424,13 +427,17 @@ export function buildPermissionRuleHint(toolName: string, input: Record<string, 
   return toolName;
 }
 
-function getRiskLabel(tool: Tool, input: Record<string, unknown>): string {
+function getRiskLabel(
+  tool: Tool,
+  input: Record<string, unknown>,
+  bashAnalysis?: BashReadOnlyAnalysis,
+): string {
   if (tool.name === "Bash") {
     const command = extractBashCommand(input);
     if (isDangerousBashCommand(command)) {
       return "High risk: destructive shell command detected";
     }
-    if (isReadOnlyCommand(command)) {
+    if (bashAnalysis?.isReadOnly) {
       return "Low risk: read-only shell command";
     }
     return "Medium risk: shell command may change files or git state";
@@ -469,6 +476,7 @@ async function resolveAutoModeDecision(
   request: PermissionRequest,
   settings: PermissionSettings,
   sessionRules: PermissionRuleSet,
+  bashAnalysis?: BashReadOnlyAnalysis,
 ): Promise<PermissionResponse> {
   if (isCoordinationTool(params.tool.name)) {
     return { behavior: "allow", reason: `${params.tool.name} writes coordination-only state`, request };
@@ -490,7 +498,7 @@ async function resolveAutoModeDecision(
     if (isHardDeniedBashCommand(command)) {
       return { behavior: "deny", reason: "high-risk shell command blocked in auto mode", request };
     }
-    if (isReadOnlyCommand(command)) {
+    if (bashAnalysis?.isReadOnly) {
       return { behavior: "allow", reason: "read-only shell command", request };
     }
   } else if (params.tool.isReadOnly()) {
@@ -591,11 +599,14 @@ export async function checkPermission(params: PermissionCheckParams): Promise<Pe
   const settings = params.settings ?? (await loadPermissionSettings(params.cwd));
   const mode = params.mode ?? settings.mode;
   const sessionRules = params.sessionRules ?? { allow: [], deny: [] };
+  const bashAnalysis = params.tool.name === "Bash"
+    ? analyzeBashCommand(extractBashCommand(params.input))
+    : undefined;
   const request: PermissionRequest = {
     toolName: params.tool.name,
     input: params.input,
     summary: summarizePermissionRequest(params.tool.name, params.input),
-    risk: getRiskLabel(params.tool, params.input),
+    risk: getRiskLabel(params.tool, params.input, bashAnalysis),
     ruleHint: buildPermissionRuleHint(params.tool.name, params.input),
   };
 
@@ -603,6 +614,16 @@ export async function checkPermission(params: PermissionCheckParams): Promise<Pe
   // fast-path. (Read-only status alone must NOT auto-allow arbitrary domains.)
   if (params.tool.name === "WebFetch") {
     return resolveWebFetchDecision(params, request, settings, sessionRules);
+  }
+
+  // Explicit Bash deny rules must win before every read-only fast path,
+  // including Plan Mode and Auto Mode.
+  if (
+    params.tool.name === "Bash" &&
+    (matchesAnyRule(sessionRules.deny, "Bash", params.input) ||
+      matchesAnyRule(settings.deny, "Bash", params.input))
+  ) {
+    return { behavior: "deny", reason: "matched deny rule", request };
   }
 
   // Auto Mode: replace the legacy "allow everything" short-circuit with a
@@ -614,7 +635,7 @@ export async function checkPermission(params: PermissionCheckParams): Promise<Pe
   // skip the classifier entirely and fall through to the default-mode
   // handling below — i.e. behave as manual confirmation — notifying once.
   if (mode === "auto" && !isAutoModeCircuitBroken()) {
-    return await resolveAutoModeDecision(params, request, settings, sessionRules);
+    return await resolveAutoModeDecision(params, request, settings, sessionRules, bashAnalysis);
   }
   if (mode === "auto") {
     notifyCircuitBreakOnce();
@@ -642,8 +663,7 @@ export async function checkPermission(params: PermissionCheckParams): Promise<Pe
       return { behavior: "ask", reason: "plan mode transition requires confirmation", request };
     }
     if (params.tool.name === "Bash") {
-      const command = extractBashCommand(params.input);
-      if (isReadOnlyCommand(command)) {
+      if (bashAnalysis?.isReadOnly) {
         return { behavior: "allow", reason: "read-only shell command allowed in plan mode", request };
       }
       return { behavior: "deny", reason: "plan mode blocks non-read-only Bash commands", request };
@@ -665,8 +685,7 @@ export async function checkPermission(params: PermissionCheckParams): Promise<Pe
   }
 
   if (params.tool.name === "Bash") {
-    const command = extractBashCommand(params.input);
-    if (isReadOnlyCommand(command)) {
+    if (bashAnalysis?.isReadOnly) {
       return { behavior: "allow", reason: "read-only shell command", request };
     }
   } else if (params.tool.isReadOnly()) {

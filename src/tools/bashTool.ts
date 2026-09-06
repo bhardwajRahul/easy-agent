@@ -14,6 +14,18 @@ import {
   startBashProgress,
 } from "../state/bashProgressStore.js";
 import { readMergedEnv } from "../utils/settings.js";
+import {
+  analyzeBashCommand,
+} from "./bashReadOnlyAnalysis.js";
+
+export {
+  analyzeBashCommand,
+  isReadOnlyCommand,
+  type BashReadOnlyAnalysis,
+  type BashReadOnlyAnalysisOptions,
+  type BashReadOnlyReason,
+  type ParsedBashCommand,
+} from "./bashReadOnlyAnalysis.js";
 
 interface BashInput {
   command: string;
@@ -38,10 +50,7 @@ async function buildProfileForCwd(
   cwd: string,
   settings: ResolvedSandboxSettings,
 ) {
-  // Dynamic import: bashTool ⇄ permissions form a static-import cycle
-  // (permissions wants `isReadOnlyCommand` from us). We break it here
-  // — this path only runs when sandboxing is on, so the extra import
-  // cost is negligible.
+  // Load permission settings only when a sandbox profile is required.
   const { loadPermissionSettings } = await import("../permissions/permissions.js");
   const permissionSettings = await loadPermissionSettings(cwd);
   return buildSandboxProfile({
@@ -53,48 +62,10 @@ async function buildProfileForCwd(
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_CHARS = 30_000;
-const READ_ONLY_COMMANDS = new Set([
-  "ls",
-  "cat",
-  "grep",
-  "rg",
-  "find",
-  "fd",
-  "pwd",
-  "which",
-  "git status",
-  "git log",
-  "git diff",
-  "git show",
-  "head",
-  "tail",
-  "wc",
-  "sed",
-]);
 
 function truncateOutput(value: string): string {
   if (value.length <= MAX_OUTPUT_CHARS) return value;
   return `${value.slice(0, MAX_OUTPUT_CHARS)}\n...[truncated ${value.length - MAX_OUTPUT_CHARS} chars]`;
-}
-
-function splitCommandSegments(command: string): string[] {
-  return command
-    .split(/&&|\|\||\|/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-}
-
-export function isReadOnlyCommand(command: string): boolean {
-  const segments = splitCommandSegments(command);
-  if (segments.length === 0) return false;
-  return segments.every((segment) => {
-    const normalized = segment.replace(/\s+/g, " ").trim();
-    if (READ_ONLY_COMMANDS.has(normalized)) return true;
-    const firstTwo = normalized.split(" ").slice(0, 2).join(" ");
-    if (READ_ONLY_COMMANDS.has(firstTwo)) return true;
-    const first = normalized.split(" ")[0];
-    return READ_ONLY_COMMANDS.has(first);
-  });
 }
 
 export const bashTool: Tool = {
@@ -119,6 +90,7 @@ export const bashTool: Tool = {
     if (!input.command) {
       return { content: "Error: command is required", isError: true };
     }
+    const readOnlyAnalysis = analyzeBashCommand(input.command);
 
     const timeoutMs = typeof input.timeout === "number" ? input.timeout : DEFAULT_TIMEOUT_MS;
 
@@ -226,7 +198,7 @@ export const bashTool: Tool = {
 
         const output = [
           `Command: ${input.command}`,
-          `Read-only: ${isReadOnlyCommand(input.command)}`,
+          `Read-only: ${readOnlyAnalysis.isReadOnly}`,
           `Sandbox: ${willSandbox ? "enabled" : "disabled"}`,
           `Exit code: ${code ?? -1}`,
           stdout ? `\nSTDOUT:\n${truncateOutput(stdout)}` : "",
