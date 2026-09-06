@@ -20,9 +20,6 @@
  *   self-contained MCP server using the SDK's Server + StdioServerTransport
  *   so the smoke test is hermetic.
  */
-import { loadEnv } from "../utils/loadEnv.js";
-loadEnv();
-
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";

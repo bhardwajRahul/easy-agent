@@ -75,7 +75,7 @@ function parseRule(rule: string): ParsedRule | null {
 
 /** Strip a trailing glob suffix so sandbox-exec gets a path prefix. */
 function stripGlobSuffix(p: string): string {
-  return p.replace(/\/?\*+$/g, "").replace(/\/$/, "") || p;
+  return p.replace(/[\\/]?\*+$/g, "").replace(/[\\/]$/, "") || p;
 }
 
 function expandHome(p: string): string {

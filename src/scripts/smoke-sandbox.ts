@@ -30,6 +30,15 @@ if (!isPlatformSupported() || !isSandboxRuntimeReady()) {
   process.exit(0);
 }
 
+const originalHome = process.env.HOME;
+const originalUserProfile = process.env.USERPROFILE;
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "easy-agent-sandbox-host-"));
+const isolatedHome = path.join(testRoot, "home");
+const skillsDir = path.join(isolatedHome, ".easy-agent", "skills");
+fs.mkdirSync(skillsDir, { recursive: true });
+process.env.HOME = isolatedHome;
+process.env.USERPROFILE = isolatedHome;
+
 const cwd = process.cwd();
 const profile = buildSandboxProfile({
   cwd,
@@ -62,7 +71,7 @@ function expect(label: string, condition: unknown, evidence?: string): void {
 
 // ─── Test 1: writes to cwd succeed ──────────────────────────────────
 section("[1] writes inside cwd succeed");
-const allowedFile = path.join(os.tmpdir(), `easy-agent-sb-${Date.now()}.txt`);
+const allowedFile = path.join(testRoot, `easy-agent-sb-${Date.now()}.txt`);
 const r1 = runSandboxed(`echo allowed > '${allowedFile}'`);
 expect("write to tmpdir succeeds (exit 0)", r1.code === 0, `exit=${r1.code} stderr=${r1.stderr}`);
 expect("file actually exists", fs.existsSync(allowedFile));
@@ -83,9 +92,9 @@ expect("no rogue file landed in /etc", !fs.existsSync("/etc/easy-agent-test"));
 
 // ─── Test 3: writes to ~/.easy-agent/skills are blocked ─────────────
 section("[3] critical path .easy-agent/skills blocked");
-const skillsDir = path.join(os.homedir(), ".easy-agent", "skills");
 const skillsCanary = path.join(skillsDir, `canary-${Date.now()}.md`);
-// Pre-condition: directory may or may not exist; we attempt write either way.
+// The directory is created before profile compilation so macOS evaluates the
+// same canonical path in both the deny rule and the sandboxed process.
 const r3 = runSandboxed(`mkdir -p '${skillsDir}' && echo evil > '${skillsCanary}' 2>&1`);
 expect("write to .easy-agent/skills fails", r3.code !== 0, `exit=${r3.code}`);
 expect("canary file does NOT exist", !fs.existsSync(skillsCanary));
@@ -98,11 +107,17 @@ expect("stdout contains hello", r4.stdout.includes("hello"));
 
 // ─── Result ──────────────────────────────────────────────────────────
 console.log("");
+const exitCode = failures.length === 0 ? 0 : 1;
 if (failures.length === 0) {
   console.log(`  All smoke checks passed.`);
-  process.exit(0);
 } else {
   console.log(`  ${failures.length} failure(s):`);
   for (const f of failures) console.log(`    - ${f}`);
-  process.exit(1);
 }
+
+if (originalHome === undefined) delete process.env.HOME;
+else process.env.HOME = originalHome;
+if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+else process.env.USERPROFILE = originalUserProfile;
+fs.rmSync(testRoot, { recursive: true, force: true });
+process.exit(exitCode);

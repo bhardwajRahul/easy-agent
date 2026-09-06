@@ -209,15 +209,15 @@ async function main(): Promise<void> {
     "WebFetch(domain:evil.com) deny → deniedDomains contains evil.com",
   );
   assert(
-    profile.filesystem.allowWrite.some((p) => p === "/repo/src"),
+    profile.filesystem.allowWrite.includes(path.resolve("/repo/src")),
     "Edit(/repo/src/**) → allowWrite contains /repo/src (glob suffix stripped)",
   );
   assert(
-    profile.filesystem.allowWrite.includes("/explicit/allow"),
+    profile.filesystem.allowWrite.includes(path.resolve("/explicit/allow")),
     "settings.filesystem.allowWrite preserved",
   );
   assert(
-    profile.filesystem.denyWrite.includes("/system/critical"),
+    profile.filesystem.denyWrite.includes(path.resolve("/system/critical")),
     "Edit(/system/critical) deny → denyWrite contains /system/critical",
   );
   // After canonicalization /etc may appear as /private/etc on macOS.

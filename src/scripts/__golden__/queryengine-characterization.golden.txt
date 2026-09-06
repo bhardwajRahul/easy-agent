@@ -146,7 +146,7 @@ command[info]:
   | - Output style: default
   | - Messages in context: 2
   | - Session tokens: in 100 / out 50
-  | - Tools enabled (21): Read, Write, Edit, MultiEdit, Glob, Grep, Bash, WebFetch, WebSearch, ListMcpResources, ReadMcpResource, MemoryWrite, TaskCreate, TaskUpdate, TaskGet, TaskList, EnterPlanMode, ExitPlanMode, Skill, AskUserQuestion, Agent
+  | - Tools enabled (22): Read, Write, Edit, MultiEdit, Glob, Grep, Bash, WebFetch, WebSearch, ListMcpResources, ReadMcpResource, MemoryWrite, TaskCreate, TaskUpdate, TaskGet, TaskList, EnterPlanMode, ExitPlanMode, Skill, AskUserQuestion, Agent, ToolSearch
   | - MCP servers: none configured
 <<< handled=true
 
@@ -157,13 +157,18 @@ command[info]:
   |
   | Context window: 200,000 tokens
   |
-  |   System prompt          ░░░░░░░░░░░░░░░░░░░░   0.8%  1,564 tok
+  |   System prompt          <SYSTEM_PROMPT_USAGE>
   |   AGENT.md + memory      ░░░░░░░░░░░░░░░░░░░░   0.0%  4 tok
-  |   Tool definitions       █░░░░░░░░░░░░░░░░░░░   3.8%  7,616 tok
+  |   Tool definitions       <TOOL_DEFINITION_USAGE>
   |   Conversation history   ░░░░░░░░░░░░░░░░░░░░   0.0%  42 tok
-  |   Free space             ███████████████████░  95.4%  190,774 tok
+  |   Free space             <FREE_SPACE>
   |
-  | Estimated used: 9,226 / 200,000 (4.6%)
+  | Estimated used: <ESTIMATED_USAGE>
+  |
+  | Tool search: on — 10 deferred tool(s), 0 loaded via ToolSearch
+  |   Always loaded: <ALWAYS_LOADED_USAGE>
+  |   Deferred loaded: 0 tool(s), ~0 tok
+  |   Deferred not loaded: 10 tool(s), 0 schema tok
 <<< handled=true
 
 ### doctor
@@ -176,7 +181,7 @@ command[info]:
   |   Endpoint: https://api.anthropic.com
   | <ENDPOINT_PROBE>
   | ✓ MCP: none configured
-  | ✓ Sandbox: sandbox-exec available (disabled in settings)
+  | <SANDBOX_STATUS>
   | ✓ Settings files valid
   | ✓ Plugins: 0 active, no load errors
 <<< handled=true
@@ -188,9 +193,8 @@ command[info]:
 <<< handled=true
 
 >>> /copy
-command[info]:
-  | Copied reply #1 to clipboard (10 chars, via pbcopy).
-  |   2 + 2 = 4.
+command[error]:
+  | <CLIPBOARD_RESULT>
 <<< handled=true
 
 >>> /copy 99

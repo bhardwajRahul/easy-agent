@@ -60,7 +60,7 @@ function registerPathReplacement(absPath: string, token: string): void {
 }
 
 function normalize(text: string): string {
-  let out = text;
+  let out = text.replace(/\r\n?/g, "\n");
   // Apply path replacements LONGEST-FIRST so a nested temp dir
   // (e.g. <TMP>/mem-xxxx) is collapsed before its parent prefix (<TMP>)
   // can swallow the prefix and leak the random mkdtemp suffix.
@@ -76,6 +76,10 @@ function normalize(text: string): string {
       out = out.replace(from, to);
     }
   }
+  out = out.replace(
+    /<(?:TMP|TMPDIR|CWD|PERMCWD|MEMCWD|CFGCWD|HOME)>[^\n]*/g,
+    (line) => line.replace(/\\/g, "/"),
+  );
   // ISO timestamps → <TIME>
   out = out.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "<TIME>");
   // Node version → <NODE>
@@ -87,6 +91,23 @@ function normalize(text: string): string {
   out = out.replace(/[✓⚠✗] Endpoint (reachable|not reachable)[^\n]*/g, "<ENDPOINT_PROBE>");
   // /doctor: API-auth-token status depends on the ambient environment — collapse it.
   out = out.replace(/[✓✗] (API auth token present|No API auth token)[^\n]*/g, "<AUTH_TOKEN>");
+  // Clipboard executables and error hints vary by platform. The test disables
+  // executable discovery while exercising /copy, so it never changes the
+  // developer's clipboard; normalize the resulting platform-specific detail.
+  out = out.replace(/Could not copy to clipboard:[^\n]*/g, "<CLIPBOARD_RESULT>");
+  // /context includes platform-specific system prompt text, so its token count
+  // and the derived free-space totals differ across operating systems.
+  out = out.replace(/System prompt\s+[^\n]*/g, "System prompt          <SYSTEM_PROMPT_USAGE>");
+  out = out.replace(/Tool definitions\s+[^\n]*/g, "Tool definitions       <TOOL_DEFINITION_USAGE>");
+  out = out.replace(/Free space\s+[^\n]*/g, "Free space             <FREE_SPACE>");
+  out = out.replace(/Estimated used: [^\n]*/g, "Estimated used: <ESTIMATED_USAGE>");
+  out = out.replace(/Always loaded: [^\n]*/g, "Always loaded: <ALWAYS_LOADED_USAGE>");
+  out = out.replace(/Tools enabled \(\d+\): ([^\n]*)/g, (_match, list: string) => {
+    const tools = list.split(", ").filter((tool) => tool !== "PowerShell");
+    return `Tools enabled (${tools.length}): ${tools.join(", ")}`;
+  });
+  // The host sandbox capability is exercised by the separate platform group.
+  out = out.replace(/[✓⚠✗] Sandbox:[^\n]*/g, "<SANDBOX_STATUS>");
   // Empty command-output rows are formatted as `"  | "` for readability in
   // memory, but the golden should not carry invisible trailing whitespace.
   return out.split("\n").map((line) => line.trimEnd()).join("\n");
@@ -209,9 +230,11 @@ async function buildRecording(): Promise<string> {
   // test fail). Node's os.homedir() observes HOME on POSIX, matching the
   // isolation strategy used by the stage-specific integration suites.
   const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
   const isolatedHome = path.join(tmpRoot, "home");
   await mkdir(isolatedHome, { recursive: true });
   process.env.HOME = isolatedHome;
+  process.env.USERPROFILE = isolatedHome;
   registerPathReplacement(tmpRoot, "<TMP>");
   registerPathReplacement(os.tmpdir(), "<TMPDIR>");
 
@@ -292,19 +315,34 @@ async function buildRecording(): Promise<string> {
     return [await record(e, "/context")];
   });
 
-  // doctor (network probe normalized away) ------------------------------------
-  await section("doctor", async () => [await record(makeEngine(isolatedCwd), "/doctor")]);
+  // doctor --------------------------------------------------------------------
+  await section("doctor", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 401 })) as typeof fetch;
+    try {
+      return [await record(makeEngine(isolatedCwd), "/doctor")];
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 
   // copy ----------------------------------------------------------------------
   await section("copy", async () => {
     const empty = makeEngine(isolatedCwd);
     const seeded = makeEngine(isolatedCwd, { initialMessages: SEED_MESSAGES });
-    return [
-      await record(empty, "/copy"),
-      await record(seeded, "/copy"),
-      await record(seeded, "/copy 99"),
-      await record(seeded, "/copy abc"),
-    ];
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      return [
+        await record(empty, "/copy"),
+        await record(seeded, "/copy"),
+        await record(seeded, "/copy 99"),
+        await record(seeded, "/copy abc"),
+      ];
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
   });
 
   // export --------------------------------------------------------------------
@@ -428,6 +466,8 @@ async function buildRecording(): Promise<string> {
   const recording = normalize(sections.join("\n\n"));
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = originalUserProfile;
   await rm(tmpRoot, { recursive: true, force: true });
 
   return recording;
@@ -447,7 +487,7 @@ async function main(): Promise<void> {
 
   let golden: string;
   try {
-    golden = await readFile(GOLDEN_PATH, "utf8");
+    golden = (await readFile(GOLDEN_PATH, "utf8")).replace(/\r\n?/g, "\n");
   } catch {
     process.stderr.write(
       `\u001b[31m[error]\u001b[0m no golden file found at ${GOLDEN_PATH}.\n` +

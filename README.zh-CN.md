@@ -237,12 +237,12 @@ npm run dev
 常用检查：
 
 ```bash
-npm run typecheck
-npm run build
-npm run test:stage36
+npm run verify:production
 npm run verify:release
 npm publish --dry-run
 ```
+
+`verify:production` 是 Pull Request 使用的离线回归门禁。完整测试清单、隔离规则、平台测试和显式 live 测试见 [测试说明](./docs/testing.md)。
 
 主代码位于 `src/`，阶段快照位于 `step/`。`dist/` 是生成且被 Git 忽略的构建目录。
 

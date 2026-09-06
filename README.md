@@ -237,12 +237,12 @@ npm run dev
 Useful checks:
 
 ```bash
-npm run typecheck
-npm run build
-npm run test:stage36
+npm run verify:production
 npm run verify:release
 npm publish --dry-run
 ```
+
+`verify:production` is the offline pull-request gate. See [Testing](./docs/testing.md) for the test inventory, isolated environment guarantees, platform checks, and explicit live tests.
 
 The main source lives under `src/`; milestone snapshots live under `step/`. Build output under `dist/` is generated and ignored by Git.
 

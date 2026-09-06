@@ -6,9 +6,6 @@
  * Run:  npx tsx scripts/verify-auto-mode-stage4.ts
  */
 
-import { loadEnv } from "../src/utils/loadEnv.js";
-loadEnv();
-
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
