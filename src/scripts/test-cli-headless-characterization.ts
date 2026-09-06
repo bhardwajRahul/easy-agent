@@ -127,6 +127,9 @@ function normalizedStructuredLines(stdout: string): string {
       if ("session_id" in parsed) parsed.session_id = "<SESSION>";
       if ("duration_ms" in parsed) parsed.duration_ms = "<DURATION>";
       if ("cwd" in parsed) parsed.cwd = "<CWD>";
+      if (parsed.type === "system" && parsed.subtype === "init" && Array.isArray(parsed.tools)) {
+        parsed.tools = parsed.tools.filter((tool) => tool !== "PowerShell");
+      }
       return JSON.stringify(parsed);
     })
     .join("\n");

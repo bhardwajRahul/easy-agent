@@ -54,9 +54,8 @@ const DEFAULT_TIMEOUT_SEC = 60;
  *   - The shell flag matters (some hooks rely on `$VAR` expansion)
  *
  * We spawn `bash -c "<command>"` (or `sh -c` if the entry asked for
- * `shell: "sh"`). On Windows this still uses bash via Git Bash if
- * present; we don't bother supporting cmd.exe / PowerShell to keep
- * the teaching version small. The README will note this.
+ * `shell: "sh"`). Windows installations therefore need a compatible
+ * POSIX shell on PATH.
  */
 async function runShellCommand(
   hook: HookCommand,
@@ -127,6 +126,14 @@ async function runShellCommand(
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf-8");
+    });
+    child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+      // A command may exit before consuming the payload. Node reports that
+      // expected race asynchronously, so the surrounding try/catch cannot
+      // intercept it.
+      if (err.code !== "EPIPE" && !settled && !stderr) {
+        stderr = `Hook stdin failed: ${err.message}`;
+      }
     });
 
     child.on("error", (err) => {

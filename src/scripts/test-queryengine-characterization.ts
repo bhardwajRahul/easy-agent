@@ -76,6 +76,10 @@ function normalize(text: string): string {
       out = out.replace(from, to);
     }
   }
+  out = out.replace(
+    /<(?:TMP|TMPDIR|CWD|PERMCWD|MEMCWD|CFGCWD|HOME)>[^\n]*/g,
+    (line) => line.replace(/\\/g, "/"),
+  );
   // ISO timestamps → <TIME>
   out = out.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "<TIME>");
   // Node version → <NODE>
@@ -94,8 +98,14 @@ function normalize(text: string): string {
   // /context includes platform-specific system prompt text, so its token count
   // and the derived free-space totals differ across operating systems.
   out = out.replace(/System prompt\s+[^\n]*/g, "System prompt          <SYSTEM_PROMPT_USAGE>");
+  out = out.replace(/Tool definitions\s+[^\n]*/g, "Tool definitions       <TOOL_DEFINITION_USAGE>");
   out = out.replace(/Free space\s+[^\n]*/g, "Free space             <FREE_SPACE>");
   out = out.replace(/Estimated used: [^\n]*/g, "Estimated used: <ESTIMATED_USAGE>");
+  out = out.replace(/Always loaded: [^\n]*/g, "Always loaded: <ALWAYS_LOADED_USAGE>");
+  out = out.replace(/Tools enabled \(\d+\): ([^\n]*)/g, (_match, list: string) => {
+    const tools = list.split(", ").filter((tool) => tool !== "PowerShell");
+    return `Tools enabled (${tools.length}): ${tools.join(", ")}`;
+  });
   // The host sandbox capability is exercised by the separate platform group.
   out = out.replace(/[✓⚠✗] Sandbox:[^\n]*/g, "<SANDBOX_STATUS>");
   // Empty command-output rows are formatted as `"  | "` for readability in

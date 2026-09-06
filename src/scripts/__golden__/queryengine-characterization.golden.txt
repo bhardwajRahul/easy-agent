@@ -159,14 +159,14 @@ command[info]:
   |
   |   System prompt          <SYSTEM_PROMPT_USAGE>
   |   AGENT.md + memory      ░░░░░░░░░░░░░░░░░░░░   0.0%  4 tok
-  |   Tool definitions       ░░░░░░░░░░░░░░░░░░░░   2.5%  4,932 tok
+  |   Tool definitions       <TOOL_DEFINITION_USAGE>
   |   Conversation history   ░░░░░░░░░░░░░░░░░░░░   0.0%  42 tok
   |   Free space             <FREE_SPACE>
   |
   | Estimated used: <ESTIMATED_USAGE>
   |
   | Tool search: on — 10 deferred tool(s), 0 loaded via ToolSearch
-  |   Always loaded: 11 tool(s), ~4932 tok
+  |   Always loaded: <ALWAYS_LOADED_USAGE>
   |   Deferred loaded: 0 tool(s), ~0 tok
   |   Deferred not loaded: 10 tool(s), 0 schema tok
 <<< handled=true
