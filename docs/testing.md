@@ -18,7 +18,7 @@ Each offline test process receives a temporary `HOME`, `USERPROFILE`, XDG direct
 | Area | Included checks | Execution |
 | --- | --- | --- |
 | Core flow | CLI and Headless protocols, QueryEngine commands, provider stream adapters, tools, ToolSearch, MCP, Skills, tasks, and agents | `core` |
-| Permissions | Allow/deny behavior, Auto Mode configuration, Plan Mode paths, and sandbox policy | `core` |
+| Permissions | Allow/deny behavior, structured Bash read-only analysis, Auto Mode configuration, Plan Mode paths, and sandbox policy | `core` |
 | Storage and configuration | Configuration precedence and source shapes, session JSONL and restore shape, file history, and retention | `core`, `extensions` |
 | Extensions | Worktrees, agent teams, hooks, commands, web and multimodal tools, plugins, and resilience | `extensions` |
 | UI | Ink rendering, input, transcript, permission prompts, progress, status line, and plugin management | `ui` |
@@ -50,6 +50,12 @@ node --import tsx scripts/verify-production.ts --group core --list
 ```
 
 Multiple `--group` options may be combined. Tests in the default gate run sequentially with independent user directories so failures are reproducible and shared process state cannot leak between test files.
+
+Run the Bash read-only security regression suite directly while changing command parsing or permission behavior:
+
+```bash
+npm run test:bash-readonly
+```
 
 ## Platform and external checks
 
