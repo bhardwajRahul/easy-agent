@@ -60,7 +60,7 @@ function registerPathReplacement(absPath: string, token: string): void {
 }
 
 function normalize(text: string): string {
-  let out = text;
+  let out = text.replace(/\r\n?/g, "\n");
   // Apply path replacements LONGEST-FIRST so a nested temp dir
   // (e.g. <TMP>/mem-xxxx) is collapsed before its parent prefix (<TMP>)
   // can swallow the prefix and leak the random mkdtemp suffix.
@@ -91,6 +91,13 @@ function normalize(text: string): string {
   // executable discovery while exercising /copy, so it never changes the
   // developer's clipboard; normalize the resulting platform-specific detail.
   out = out.replace(/Could not copy to clipboard:[^\n]*/g, "<CLIPBOARD_RESULT>");
+  // /context includes platform-specific system prompt text, so its token count
+  // and the derived free-space totals differ across operating systems.
+  out = out.replace(/System prompt\s+[^\n]*/g, "System prompt          <SYSTEM_PROMPT_USAGE>");
+  out = out.replace(/Free space\s+[^\n]*/g, "Free space             <FREE_SPACE>");
+  out = out.replace(/Estimated used: [^\n]*/g, "Estimated used: <ESTIMATED_USAGE>");
+  // The host sandbox capability is exercised by the separate platform group.
+  out = out.replace(/[✓⚠✗] Sandbox:[^\n]*/g, "<SANDBOX_STATUS>");
   // Empty command-output rows are formatted as `"  | "` for readability in
   // memory, but the golden should not carry invisible trailing whitespace.
   return out.split("\n").map((line) => line.trimEnd()).join("\n");
@@ -470,7 +477,7 @@ async function main(): Promise<void> {
 
   let golden: string;
   try {
-    golden = await readFile(GOLDEN_PATH, "utf8");
+    golden = (await readFile(GOLDEN_PATH, "utf8")).replace(/\r\n?/g, "\n");
   } catch {
     process.stderr.write(
       `\u001b[31m[error]\u001b[0m no golden file found at ${GOLDEN_PATH}.\n` +

@@ -157,13 +157,13 @@ command[info]:
   |
   | Context window: 200,000 tokens
   |
-  |   System prompt          ░░░░░░░░░░░░░░░░░░░░   0.8%  1,564 tok
+  |   System prompt          <SYSTEM_PROMPT_USAGE>
   |   AGENT.md + memory      ░░░░░░░░░░░░░░░░░░░░   0.0%  4 tok
   |   Tool definitions       ░░░░░░░░░░░░░░░░░░░░   2.5%  4,932 tok
   |   Conversation history   ░░░░░░░░░░░░░░░░░░░░   0.0%  42 tok
-  |   Free space             ███████████████████░  96.7%  193,458 tok
+  |   Free space             <FREE_SPACE>
   |
-  | Estimated used: 6,542 / 200,000 (3.3%)
+  | Estimated used: <ESTIMATED_USAGE>
   |
   | Tool search: on — 10 deferred tool(s), 0 loaded via ToolSearch
   |   Always loaded: 11 tool(s), ~4932 tok
@@ -181,7 +181,7 @@ command[info]:
   |   Endpoint: https://api.anthropic.com
   | <ENDPOINT_PROBE>
   | ✓ MCP: none configured
-  | ✓ Sandbox: sandbox-exec available (disabled in settings)
+  | <SANDBOX_STATUS>
   | ✓ Settings files valid
   | ✓ Plugins: 0 active, no load errors
 <<< handled=true

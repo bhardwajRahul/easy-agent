@@ -392,7 +392,7 @@ async function main(): Promise<void> {
 
   let golden: string;
   try {
-    golden = await readFile(GOLDEN_PATH, "utf8");
+    golden = (await readFile(GOLDEN_PATH, "utf8")).replace(/\r\n?/g, "\n");
   } catch {
     process.stderr.write(
       `\u001b[31m[error]\u001b[0m no golden file at ${GOLDEN_PATH}.\n` +

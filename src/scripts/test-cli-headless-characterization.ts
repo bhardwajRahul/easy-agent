@@ -279,7 +279,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const golden = await readFile(GOLDEN_PATH, "utf8");
+  const golden = (await readFile(GOLDEN_PATH, "utf8")).replace(/\r\n?/g, "\n");
   assert.equal(recording, golden, "CLI/headless characterization mismatch; use --update only for intentional changes");
   process.stdout.write(`[pass] CLI/headless characterization matches golden (${recording.split("\n").length} lines).\n`);
 }
